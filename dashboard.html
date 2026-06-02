@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rapportserier – NB</title>
+<style>
+/* ── Reset & base ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --nb-blue:    #1F4E79;
+  --nb-light:   #EBF3FB;
+  --nb-mid:     #2E75B6;
+  --green:      #1a7a45;
+  --green-bg:   #d4edda;
+  --orange:     #a04000;
+  --orange-bg:  #fdebd0;
+  --red:        #922b21;
+  --red-bg:     #fadbd8;
+  --gray:       #6c757d;
+  --gray-bg:    #f1f3f5;
+  --border:     #dde3ef;
+  --sidebar-w:  300px;
+  --topbar-h:   56px;
+}
+html, body { height: 100%; font-family: Arial, sans-serif; font-size: 14px; color: #1a1a2e; background: #f4f6fa; }
+
+/* ── Top bar ── */
+.topbar {
+  position: fixed; top: 0; left: 0; right: 0; height: var(--topbar-h);
+  background: var(--nb-blue); color: white;
+  display: flex; align-items: center; gap: 16px; padding: 0 20px;
+  z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+.topbar h1 { font-size: 16px; font-weight: 700; letter-spacing: 0.2px; }
+.topbar-meta { font-size: 11px; opacity: 0.7; margin-top: 2px; }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.topbar .btn { padding: 6px 14px; font-size: 12px; }
+
+/* ── Layout ── */
+.layout {
+  display: flex;
+  margin-top: var(--topbar-h);
+  height: calc(100vh - var(--topbar-h));
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  background: white;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sidebar-search {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-search input {
+  width: 100%;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+.sidebar-list {
+  overflow-y: auto;
+  flex: 1;
+}
+.sidebar-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid #f5f5f5;
+  transition: background 0.1s;
+}
+.sidebar-item:hover { background: #f8f9ff; }
+.sidebar-item.active { background: var(--nb-light); border-left: 3px solid var(--nb-blue); }
+.sidebar-item .dot {
+  width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; margin-top: 4px;
+}
+.dot-ok { background: #27ae60; }
+.dot-warn { background: #e67e22; }
+.dot-unknown { background: #bdc3c7; }
+.dot-error { background: var(--red); }
+.sidebar-item-text { flex: 1; min-width: 0; }
+.sidebar-item-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-item-sub { font-size: 11px; color: var(--gray); margin-top: 2px; }
+.sidebar-add {
+  padding: 12px; border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+/* ── Main content ── */
+.main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ── Home / overview ── */
+.stat-row { display: flex; gap: 14px; flex-wrap: wrap; }
+.stat-card {
+  background: white; border-radius: 10px; border: 1px solid var(--border);
+  padding: 16px 22px; min-width: 140px; flex: 1;
+  display: flex; flex-direction: column; align-items: center;
+}
+.stat-card .num { font-size: 32px; font-weight: 800; color: var(--nb-blue); }
+.stat-card.ok .num { color: var(--green); }
+.stat-card.warn .num { color: var(--orange); }
+.stat-card .lbl { font-size: 12px; color: var(--gray); margin-top: 3px; text-align: center; }
+
+/* ── Cards ── */
+.card {
+  background: white; border-radius: 10px; border: 1px solid var(--border);
+  overflow: hidden;
+}
+.card-header {
+  padding: 16px 20px;
+  display: flex; align-items: center; gap: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.card-header h2 { font-size: 16px; font-weight: 700; }
+.card-header .sub { font-size: 12px; color: var(--gray); margin-top: 2px; }
+.card-body { padding: 16px 20px; }
+
+/* ── Badges ── */
+.badge {
+  font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 10px;
+  white-space: nowrap;
+}
+.badge-ok { background: var(--green-bg); color: var(--green); }
+.badge-warn { background: var(--orange-bg); color: var(--orange); }
+.badge-error { background: var(--red-bg); color: var(--red); }
+.badge-info { background: var(--nb-light); color: var(--nb-blue); }
+.badge-gray { background: var(--gray-bg); color: var(--gray); }
+
+/* ── Buttons ── */
+.btn {
+  border: none; border-radius: 6px; cursor: pointer;
+  font-size: 13px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 16px; transition: background 0.15s;
+}
+.btn-primary { background: var(--nb-blue); color: white; }
+.btn-primary:hover { background: #163a5c; }
+.btn-secondary { background: #e8eef7; color: var(--nb-blue); }
+.btn-secondary:hover { background: #d0ddf0; }
+.btn-danger { background: var(--red-bg); color: var(--red); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Table ── */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { background: var(--gray-bg); text-align: left; padding: 8px 12px; font-weight: 600; color: #555; border-bottom: 2px solid var(--border); }
+td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #fafbff; }
+a { color: var(--nb-blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Year chart ── */
+.year-chart { display: flex; align-items: flex-end; gap: 3px; height: 80px; margin-top: 10px; }
+.year-bar-wrap { display: flex; flex-direction: column; align-items: center; flex: 1; }
+.year-bar {
+  background: var(--nb-blue); border-radius: 3px 3px 0 0;
+  width: 100%; transition: height 0.3s; cursor: default;
+  min-height: 2px;
+}
+.year-bar:hover { background: var(--nb-mid); }
+.year-label { font-size: 9px; color: var(--gray); margin-top: 3px; transform: rotate(-45deg); }
+
+/* ── Progress bar ── */
+.progress-wrap { background: #e9ecef; border-radius: 4px; height: 8px; overflow: hidden; }
+.progress-bar { height: 100%; border-radius: 4px; background: var(--nb-blue); transition: width 0.4s; }
+
+/* ── Status pills in overview table ── */
+.status-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; font-weight: 600;
+}
+
+/* ── Spinner ── */
+.spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid #ccc; border-top-color: var(--nb-blue);
+  border-radius: 50%; animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Publisher PDF list ── */
+.pdf-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.pdf-row {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 6px 10px; border-radius: 6px; font-size: 13px;
+}
+.pdf-row.missing { background: var(--orange-bg); border: 1px solid #f0c080; }
+.pdf-row.present { background: var(--green-bg); border: 1px solid #b2dfcb; }
+.pdf-row.unknown { background: var(--gray-bg); border: 1px solid #ddd; }
+
+/* ── Mangler-tabell ── */
+.mangler-table { width:100%; border-collapse:collapse; font-size:12px; margin-top:8px; }
+.mangler-table th { background:var(--orange-bg); color:var(--orange); padding:6px 10px; text-align:left; font-weight:700; border-bottom:2px solid #f0c080; position:sticky;top:0; }
+.mangler-table td { padding:6px 10px; border-bottom:1px solid #f5ebe0; vertical-align:middle; }
+.mangler-table tr:last-child td { border-bottom:none; }
+.mangler-table tr:hover td { background:#fef6ee; }
+.mangler-table .actions { display:flex; gap:6px; flex-wrap:wrap; }
+.check-running { display:flex; align-items:center; gap:10px; padding:20px; color:var(--gray); font-size:13px; }
+.check-progress { font-size:12px; color:var(--gray); margin-top:4px; }
+.scroll-box { border:1px solid var(--border); border-radius:8px; overflow-y:auto; max-height:520px; }
+.scroll-box table { width:100%; }
+.check-box { border:1px solid var(--border); border-radius:8px; padding:0; max-height:520px; overflow-y:auto; }
+
+/* ── Empty / loading states ── */
+.empty { text-align: center; padding: 40px 20px; color: var(--gray); font-size: 13px; }
+.loading { text-align: center; padding: 30px; color: var(--gray); }
+
+/* ── Two-column grid ── */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+
+.section-label { font-size: 11px; font-weight: 700; color: var(--gray); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+
+/* ── ISSN tag ── */
+.issn-tag { font-family: monospace; font-size: 12px; background: var(--gray-bg); padding: 2px 7px; border-radius: 4px; }
+
+/* ── Notification toast ── */
+.toast {
+  position: fixed; bottom: 24px; right: 24px;
+  background: #1a1a2e; color: white;
+  padding: 12px 18px; border-radius: 8px;
+  font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  animation: fadeIn 0.3s;
+  z-index: 999;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* ── Overview table clickable ── */
+.clickable { cursor: pointer; }
+.clickable:hover .serie-name-link { color: var(--nb-mid); text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div>
+    <div class="topbar-meta" style="font-size:13px;opacity:1;font-weight:700;">📚 Nasjonalbiblioteket</div>
+    <h1>Rapportserier – innleveringsoppfølging</h1>
+  </div>
+  <div class="topbar-right">
+    <span id="last-check" style="font-size:11px;opacity:0.7;"></span>
+    <button class="btn btn-secondary" onclick="visOverview()" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.3);">🏠 Oversikt</button>
+    <button class="btn btn-primary" onclick="oppdaterAlle()" id="btn-oppdater" style="background:#2E75B6;">🔄 Oppdater alle</button>
+  </div>
+</div>
+
+<!-- Layout -->
+<div class="layout">
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-search">
+      <input type="text" id="sidebar-search" placeholder="Søk på serie…" oninput="filterSidebar()">
+    </div>
+    <div class="sidebar-list" id="sidebar-list">
+      <div class="loading"><span class="spinner"></span> Laster serier…</div>
+    </div>
+    <div class="sidebar-add">
+      <small style="color:var(--gray);">Legg til serier i <strong>rapportserier_konfig.xlsx</strong></small>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main" id="main-content">
+    <div class="loading"><span class="spinner"></span> Laster inn…</div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────────
+let SERIER = [];          // config fra server
+let NB_CACHE = {};        // issnPrint → { total, latestYear, items[], byYear:{} }
+let STATUS_DATA = null;   // siste rapport_status.json (om tilgjengelig)
+let CHECK_CACHE = {};     // serieName → { loading, result, error, startedAt }
+let ACTIVE_SERIE = null;  // navn på valgt serie
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+async function init() {
+  // Prøv å laste konfig
+  try {
+    const r = await fetch('/api/serier');
+    SERIER = await r.json();
+  } catch(e) {
+    SERIER = getFallbackSerier();
+    toast('Tjener ikke tilgjengelig – viser eksempeldata');
+  }
+
+  // Prøv å laste sist lagrede statusfil
+  try {
+    const r = await fetch('/api/status');
+    if (r.ok) STATUS_DATA = await r.json();
+  } catch(e) {}
+
+  renderSidebar();
+  visOverview();
+}
+
+function getFallbackSerier() {
+  return [
+    { name:"Fafo-rapport", issnPrint:"08016143", issnDigital:"08045135", publisher:"Fafo", publisherUrl:"https://www.fafo.no/rapporter/fafo-rapporter", active:true },
+    { name:"NIBR-rapport", issnPrint:"08073961", issnDigital:"", publisher:"NIBR / OsloMet", publisherUrl:"https://www.oslomet.no/forskning/forskningsinstitutt/nibr/nibr-rapport", active:true },
+    { name:"SSB Rapporter", issnPrint:"08062056", issnDigital:"18927513", publisher:"Statistisk sentralbyrå", publisherUrl:"https://www.ssb.no/publikasjoner/rapporter", active:true },
+    { name:"FHI Rapport", issnPrint:"08070421", issnDigital:"", publisher:"Folkehelseinstituttet", publisherUrl:"https://www.fhi.no/publ/", active:true },
+  ];
+}
+
+// ── Sidebar ────────────────────────────────────────────────────────────────────
+function renderSidebar() {
+  const q = (document.getElementById('sidebar-search')?.value || '').toLowerCase();
+  const list = document.getElementById('sidebar-list');
+  const active = SERIER.filter(s => s.active !== false);
+  const filtered = active.filter(s =>
+    !q || s.name.toLowerCase().includes(q) || s.publisher.toLowerCase().includes(q)
+  );
+
+  if (!filtered.length) {
+    list.innerHTML = '<div class="empty">Ingen serier funnet.</div>';
+    return;
+  }
+
+  list.innerHTML = filtered.map(serie => {
+    const nb = NB_CACHE[serie.issnPrint || serie.name];
+    const st = getStatus(serie);
+    const dotClass = { ok:'dot-ok', warn:'dot-warn', unknown:'dot-unknown', error:'dot-error' }[st] || 'dot-unknown';
+    const isActive = ACTIVE_SERIE === serie.name;
+    const countTxt = nb ? `${nb.total.toLocaleString('nb-NO')} poster` : 'Ikke hentet';
+    return `<div class="sidebar-item${isActive ? ' active' : ''}" onclick="visSerie('${esc(serie.name)}')">
+      <div class="dot ${dotClass}"></div>
+      <div class="sidebar-item-text">
+        <div class="sidebar-item-name" title="${esc(serie.name)}">${serie.name}</div>
+        <div class="sidebar-item-sub">${serie.publisher} · ${countTxt}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function filterSidebar() { renderSidebar(); }
+
+// ── Overview ───────────────────────────────────────────────────────────────────
+function visOverview() {
+  ACTIVE_SERIE = null;
+  renderSidebar();
+  const main = document.getElementById('main-content');
+  const active = SERIER.filter(s => s.active !== false);
+  const hentet = active.filter(s => NB_CACHE[s.issnPrint]);
+  const totPoster = Object.values(NB_CACHE).reduce((a, v) => a + (v.total || 0), 0);
+  const warn = active.filter(s => getStatus(s) === 'warn').length;
+  const ok = active.filter(s => getStatus(s) === 'ok').length;
+
+  const tableRows = active.map(serie => {
+    const nb = NB_CACHE[serie.issnPrint || serie.name];
+    const st = getStatus(serie);
+    const dotC = { ok:'dot-ok', warn:'dot-warn', unknown:'dot-unknown' }[st] || 'dot-unknown';
+    const stTxt = { ok:'✓ OK', warn:'⚠ Mulige mangler', unknown:'Ikke sjekket' }[st] || '–';
+    const stColor = { ok:'color:var(--green)', warn:'color:var(--orange)', unknown:'color:var(--gray)' }[st] || '';
+    const issnFmt = serie.issnPrint ? serie.issnPrint.replace(/(\d{4})(\d{4})/,'$1-$2') : '–';
+    return `<tr class="clickable" onclick="visSerie('${esc(serie.name)}')">
+      <td><span class="dot ${dotC}" style="display:inline-block;margin-right:7px;"></span><span class="serie-name-link" style="font-weight:600;">${serie.name}</span></td>
+      <td>${serie.publisher}</td>
+      <td><span class="issn-tag">${issnFmt}</span></td>
+      <td>${nb ? nb.total.toLocaleString('nb-NO') : '–'}</td>
+      <td>${nb ? (nb.latestYear || '–') : '–'}</td>
+      <td><span style="${stColor};font-weight:600;">${stTxt}</span></td>
+      <td><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();hentNB('${esc(serie.issnPrint)}','${esc(serie.name)}')">Hent</button></td>
+    </tr>`;
+  }).join('');
+
+  main.innerHTML = `
+    <div class="stat-row">
+      <div class="stat-card"><div class="num">${active.length}</div><div class="lbl">Serier overvåket</div></div>
+      <div class="stat-card ok"><div class="num">${ok}</div><div class="lbl">Fullt innlevert</div></div>
+      <div class="stat-card warn"><div class="num">${warn}</div><div class="lbl">Mulige mangler</div></div>
+      <div class="stat-card"><div class="num">${totPoster.toLocaleString('nb-NO')}</div><div class="lbl">Poster totalt i NB</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <h2>Alle rapportserier</h2>
+          <div class="sub">${hentet.length} av ${active.length} sjekket mot NB-katalog · Klikk på en rad for detaljer</div>
+        </div>
+      </div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead><tr>
+            <th>Serie</th><th>Utgiver</th><th>ISSN</th><th>NB-poster</th><th>Siste år</th><th>Status</th><th></th>
+          </tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>
+    </div>
+
+    ${STATUS_DATA ? `<div class="card">
+      <div class="card-header"><h2>Siste fullstendige sjekk</h2><div class="sub">${fmtDato(STATUS_DATA.generatedAt)}</div></div>
+      <div class="card-body">
+        <p style="color:var(--gray);font-size:13px;">Kjørt via <code>sjekk_rapportserier.py</code>.
+        ${STATUS_DATA.serier?.filter(s=>s.mangler?.length>0).length || 0} serie(r) med mulige mangler funnet.</p>
+      </div>
+    </div>` : ''}
+  `;
+}
+
+// ── Serie-detaljvisning ────────────────────────────────────────────────────────
+async function visSerie(name) {
+  ACTIVE_SERIE = name;
+  renderSidebar();
+  const serie = SERIER.find(s => s.name === name);
+  if (!serie) return;
+
+  const main = document.getElementById('main-content');
+  main.innerHTML = `<div class="loading"><span class="spinner"></span> Laster data for <strong>${serie.name}</strong>…</div>`;
+
+  // Hent NB-data om ikke cachet (fallback: tittel → Alma SRU)
+  const cacheKey = serie.issnPrint || serie.name;
+  if (!NB_CACHE[cacheKey]) {
+    await hentNBOgVent(serie.issnPrint, serie.name, serie.mmsId || '');
+  }
+
+  renderSerieView(serie);
+}
+
+function renderSerieView(serie) {
+  const main = document.getElementById('main-content');
+  const nb = NB_CACHE[serie.issnPrint || serie.name] || {};
+  const statusData = STATUS_DATA?.serier?.find(s => s.name === serie.name);
+  const issnFmt = s => s ? s.replace(/(\d{4})(\d{4})/, '$1-$2') : '–';
+
+  // Year-by-year chart
+  const byYear = nb.byYear || {};
+  const years = Object.keys(byYear).sort();
+  const maxCount = Math.max(...Object.values(byYear), 1);
+  const chartHtml = years.length > 0 ? `
+    <div class="year-chart">
+      ${years.map(y => {
+        const h = Math.max(4, Math.round((byYear[y] / maxCount) * 72));
+        return `<div class="year-bar-wrap" title="${y}: ${byYear[y]} poster">
+          <div class="year-bar" style="height:${h}px"></div>
+          <div class="year-label">${y}</div>
+        </div>`;
+      }).join('')}
+    </div>` : '';
+
+  // Recent items table
+  const items = nb.items || [];
+  const itemsHtml = items.length > 0 ? `
+    <div class="scroll-box">
+      <table>
+        <thead><tr><th>Tittel</th><th>År</th><th>Oria</th></tr></thead>
+        <tbody>${items.map(item => {
+          const mmsId = item.oaiId ? item.oaiId.split(':').pop() : '';
+          const oriaUrl = mmsId ? `https://bibsys-g.primo.exlibrisgroup.com/discovery/fulldisplay?docid=alma${mmsId}&context=L&vid=47BIBSYS_NB:NB&lang=no&search_scope=MyInst_and_CI&adaptor=Local%20Search%20Engine&tab=default_slot&query=any,contains,${mmsId}&offset=0` : '';
+          return `<tr>
+            <td>${item.title}</td>
+            <td>${item.year || '–'}</td>
+            <td>${oriaUrl ? `<a href="${oriaUrl}" target="_blank">↗ Oria</a>` : '–'}</td>
+          </tr>`;
+        }).join('')}
+        ${nb.total > items.length ? `<tr><td colspan="3" style="color:var(--gray);font-style:italic;padding:8px 12px;">Viser ${items.length.toLocaleString('nb-NO')} av ${nb.total.toLocaleString('nb-NO')} poster (hent flere via NB-søk)</td></tr>` : ''}
+        </tbody>
+      </table>
+    </div>` : '<div class="empty">Ingen poster funnet i NB.</div>';
+
+  // Publisher section – bruker CHECK_CACHE (live) eller STATUS_DATA (lagret)
+  const checkState = CHECK_CACHE[serie.name];
+  const pubHtml = renderPublisherSection(serie, checkState, statusData);
+
+  const issnDisplay = [
+    serie.issnPrint ? `Trykt: ${issnFmt(serie.issnPrint)}` : '',
+    serie.issnDigital ? `Digital: ${issnFmt(serie.issnDigital)}` : '',
+  ].filter(Boolean).join(' · ');
+
+  main.innerHTML = `
+    <!-- Header -->
+    <div class="card">
+      <div class="card-body" style="display:flex;align-items:flex-start;gap:16px;">
+        <div style="flex:1">
+          <h2 style="font-size:20px;">${serie.name}</h2>
+          <div style="color:var(--gray);font-size:13px;margin-top:4px;">${serie.publisher}</div>
+          <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            ${issnDisplay ? `<span class="issn-tag">${issnDisplay}</span>` : ''}
+            ${nb.total ? `<span class="badge badge-info">${nb.total.toLocaleString('nb-NO')} poster i NB</span>` : ''}
+            ${nb.latestYear ? `<span class="badge badge-gray">Siste år: ${nb.latestYear}</span>` : ''}
+            ${serie.note ? `<span style="font-size:11px;color:var(--gray);">📝 ${serie.note}</span>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-shrink:0;flex-wrap:wrap;">
+          <button class="btn btn-secondary btn-sm" onclick="hentNB('${esc(serie.issnPrint)}','${esc(serie.name)}')">🔄 Oppdater NB</button>
+          <button class="btn btn-primary btn-sm" onclick="window.open('${serie.publisherUrl}','_blank')">🌐 Utgivers nettside</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="two-col">
+
+      <!-- NB-beholdning -->
+      <div class="card">
+        <div class="card-header">
+          <h2>NB-beholdning</h2>
+          ${nb.sokeMetode ? `<span class="badge badge-gray" style="margin-left:auto;font-size:10px;" title="Søkemetode">${nb.sokeMetode.startsWith('alma') ? '🔗 Alma SRU' : nb.sokeMetode.startsWith('issn') ? '🔢 ISSN' : '🔤 Serietittel'}</span>` : ''}
+        </div>
+        <div class="card-body">
+          ${nb.total ? `
+            <div style="font-size:13px;margin-bottom:4px;color:var(--gray);">Antall poster per år</div>
+            ${chartHtml}
+            <div style="margin-top:16px;" class="section-label">Nyeste poster</div>
+            ${itemsHtml}
+          ` : `
+            <div class="empty">
+              ${serie.issnPrint ? 'Trykk «Oppdater NB» for å hente beholdning.' : 'Ingen ISSN registrert – kan ikke søke i NB-katalog.'}
+            </div>
+          `}
+        </div>
+      </div>
+
+      <!-- Utgivers nettside -->
+      <div class="card" id="pub-card-${encodeURIComponent(serie.name)}">
+        <div class="card-header">
+          <div>
+            <h2>Mangler hos NB</h2>
+            <div class="sub"><a href="${serie.publisherUrl}" target="_blank" style="color:var(--gray);">${serie.publisherUrl}</a></div>
+          </div>
+          <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+            ${(checkState?.result || statusData) ? `<span class="badge badge-gray" style="font-size:10px;">Sjekket ${fmtDato(checkState?.result?.checkedAt || statusData?.checkedAt)}</span>` : ''}
+            <button class="btn btn-primary btn-sm" id="btn-sjekk-${encodeURIComponent(serie.name)}"
+              onclick="kjorSjekk('${esc(serie.name)}')"
+              ${checkState?.loading ? 'disabled' : ''}>
+              ${checkState?.loading ? '<span class="spinner"></span> Sjekker…' : '🔍 Kjør sjekk'}
+            </button>
+          </div>
+        </div>
+        <div class="card-body" id="pub-body-${encodeURIComponent(serie.name)}">
+          ${pubHtml}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Publisher-sjekk ────────────────────────────────────────────────────────────
+
+function renderPublisherSection(serie, checkState, statusData) {
+  // Prioritér live CHECK_CACHE, fall back til lagret STATUS_DATA
+  const result = checkState?.result || (statusData ? {
+    mangler: statusData.mangler || [],
+    publisher: {
+      jsRendered: statusData.publisher_data?.js_rendered,
+      error: statusData.publisher_data?.error,
+      totalFunnet: (statusData.publisherPdfs || []).length,
+    },
+    nb: statusData.nb || {},
+  } : null);
+
+  if (checkState?.loading) {
+    return `<div class="check-running">
+      <span class="spinner" style="width:20px;height:20px;border-width:3px;"></span>
+      <div>
+        <div style="font-weight:600;">Sjekker utgivers nettside…</div>
+        <div class="check-progress">Henter publikasjonsliste og sammenligner mot NB. Dette kan ta 1–2 minutter.</div>
+      </div>
+    </div>`;
+  }
+
+  if (checkState?.error) {
+    return `<div class="badge badge-error" style="margin-bottom:10px;">Feil under sjekk</div>
+    <p style="font-size:13px;color:var(--red);margin-top:8px;">${checkState.error}</p>
+    <a href="${serie.publisherUrl}" target="_blank" class="btn btn-secondary btn-sm" style="margin-top:10px;">🌐 Åpne manuelt</a>`;
+  }
+
+  if (!result) {
+    return `<div style="color:var(--gray);font-size:13px;margin-bottom:14px;">
+      Trykk «Kjør sjekk» for å søke gjennom utgivers nettside og finne rapporter som ikke er avlevert til NB.
+    </div>
+    <a href="${serie.publisherUrl}" target="_blank" class="btn btn-secondary btn-sm">🌐 Åpne ${serie.publisher}s nettside</a>`;
+  }
+
+  const pub = result.publisher || {};
+  const mangler = result.mangler || [];
+
+  if (pub.jsRendered) {
+    return `<div class="badge badge-gray" style="margin-bottom:10px;">Siden er JavaScript-rendret</div>
+    <p style="font-size:13px;color:var(--gray);margin-top:8px;">Kan ikke sjekkes automatisk. Åpne manuelt og se etter nye hefter.</p>
+    <a href="${serie.publisherUrl}" target="_blank" class="btn btn-secondary btn-sm" style="margin-top:10px;">🌐 Åpne ${serie.publisher}s nettside</a>`;
+  }
+
+  if (pub.error) {
+    return `<div class="badge badge-error">Feil: ${pub.error}</div>`;
+  }
+
+  const antallFunnet = pub.totalFunnet || 0;
+  const nbAar = result.nb?.latestYear || '?';
+
+  if (mangler.length === 0) {
+    return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+      <span class="badge badge-ok">✓ Ingen mangler funnet</span>
+      <span style="font-size:12px;color:var(--gray);">${antallFunnet} publikasjoner sjekket</span>
+    </div>
+    <p style="font-size:13px;color:var(--gray);">Alle rapporter på utgivers nettside ser ut til å være registrert i NB (siste NB-år: ${nbAar}).</p>
+    <a href="${serie.publisherUrl}" target="_blank" class="btn btn-secondary btn-sm" style="margin-top:10px;">🌐 Åpne ${serie.publisher}s nettside</a>`;
+  }
+
+  // Grupper mangler per år
+  const perAar = {};
+  for (const m of mangler) {
+    const y = m.year || '?';
+    if (!perAar[y]) perAar[y] = [];
+    perAar[y].push(m);
+  }
+  const sorterteAar = Object.keys(perAar).sort((a,b) => b.localeCompare(a));
+
+  const tabellRader = sorterteAar.flatMap(aar =>
+    perAar[aar].map(m => {
+      const pdfLink = m.pdfUrl
+        ? `<a href="${m.pdfUrl}" target="_blank" class="btn btn-secondary btn-sm" style="white-space:nowrap;">⬇ PDF</a>`
+        : '–';
+      const sideLink = m.url
+        ? `<a href="${m.url}" target="_blank" class="btn btn-secondary btn-sm" style="white-space:nowrap;">↗ Side</a>`
+        : '–';
+      return `<tr>
+        <td>${m.title || '–'}</td>
+        <td style="white-space:nowrap;">${m.rapportNr || '–'}</td>
+        <td style="text-align:center;">${aar}</td>
+        <td><div class="actions">${pdfLink}${sideLink}</div></td>
+      </tr>`;
+    })
+  ).join('');
+
+  return `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap;">
+      <span class="badge badge-warn">⚠ ${mangler.length} mulige mangler</span>
+      <span style="font-size:12px;color:var(--gray);">av ${antallFunnet} sjekket · NB siste år: ${nbAar}</span>
+      <a href="${serie.publisherUrl}" target="_blank" style="font-size:12px;margin-left:auto;">🌐 Utgivers nettside</a>
+    </div>
+    <div class="check-box" id="mangler-scroll-${encodeURIComponent(serie.name)}">
+      <table class="mangler-table">
+        <thead><tr><th>Tittel</th><th>Rapport nr.</th><th style="text-align:center;">År</th><th>Lenker</th></tr></thead>
+        <tbody>${tabellRader}</tbody>
+      </table>
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:var(--gray);">
+      Sammenligning basert på tittellikhet og rapportnummer. Verifiser manuelt før avleveringskrav sendes.
+    </div>`;
+}
+
+async function kjorSjekk(name) {
+  CHECK_CACHE[name] = { loading: true, result: null, error: null, startedAt: new Date() };
+
+  // Oppdater kun publisher-kortet uten full re-render
+  const serie = SERIER.find(s => s.name === name);
+  if (serie && ACTIVE_SERIE === name) {
+    const bodyEl = document.getElementById(`pub-body-${encodeURIComponent(name)}`);
+    const btnEl  = document.getElementById(`btn-sjekk-${encodeURIComponent(name)}`);
+    if (bodyEl) bodyEl.innerHTML = renderPublisherSection(serie, CHECK_CACHE[name], null);
+    if (btnEl)  { btnEl.disabled = true; btnEl.innerHTML = '<span class="spinner"></span> Sjekker…'; }
+  }
+
+  try {
+    const r = await fetch('/api/sjekk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await r.json();
+    if (!r.ok || data.error) throw new Error(data.error || `HTTP ${r.status}`);
+    CHECK_CACHE[name] = { loading: false, result: data, error: null };
+  } catch(e) {
+    CHECK_CACHE[name] = { loading: false, result: null, error: e.message };
+  }
+
+  renderSidebar();
+  if (ACTIVE_SERIE === name && serie) {
+    renderSerieView(serie);
+    // Scroll mangler-boksen til bunn så nyeste rapporter vises
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`mangler-scroll-${encodeURIComponent(name)}`);
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }
+}
+
+// ── NB API calls ───────────────────────────────────────────────────────────────
+async function hentNBOgVent(issn, title = '', mmsId = '') {
+  if (!issn && !title) return;
+  try {
+    let page = 0, items = [], total = 0, sokeMetode = '';
+    do {
+      const params = new URLSearchParams({ page, size: 50 });
+      if (issn)  params.set('issn',  issn);
+      if (title) params.set('title', title);
+      const r = await fetch(`/api/nb?${params}`);
+      const d = await r.json();
+      if (d.error) break;
+      total = d.page?.totalElements || 0;
+      sokeMetode = d._sokeMetode || '';
+
+      // Fallback til Alma SRU om NB-søk gir 0 treff
+      if (total === 0 && mmsId && page === 0) {
+        const ra = await fetch(`/api/alma?mmsId=${mmsId}&title=${encodeURIComponent(title)}`);
+        const da = await ra.json();
+        if ((da.page?.totalElements || 0) > 0) {
+          total = da.page.totalElements;
+          sokeMetode = da._sokeMetode || 'alma-sru';
+          const batch = da._embedded?.items || [];
+          items.push(...batch.map(item => ({
+            title: item.metadata?.title || '–',
+            year:  item.metadata?.originInfo?.issued || '–',
+            oaiId: item.metadata?.identifiers?.oaiId || '',
+          })));
+          break;
+        }
+      }
+
+      const batch = d._embedded?.items || [];
+      items.push(...batch.map(item => ({
+        title: item.metadata?.title || '–',
+        year:  item.metadata?.originInfo?.issued || '–',
+        oaiId: item.metadata?.identifiers?.oaiId || '',
+      })));
+      page++;
+      if (items.length >= 200 || page * 50 >= total) break;
+    } while (true);
+
+    const byYear = {};
+    for (const i of items) {
+      const y = String(i.year);
+      if (/^\d{4}$/.test(y)) byYear[y] = (byYear[y] || 0) + 1;
+    }
+    const years = Object.keys(byYear).map(Number).filter(y => !isNaN(y));
+    // Bruk tittel som cache-nøkkel om ISSN mangler
+    const cacheKey = issn || title;
+    NB_CACHE[cacheKey] = { total, items, byYear, latestYear: years.length ? Math.max(...years) : null, sokeMetode };
+  } catch(e) {
+    const cacheKey = issn || title;
+    NB_CACHE[cacheKey] = { total: 0, items: [], byYear: {}, latestYear: null, error: String(e) };
+  }
+}
+
+async function hentNB(issn, name) {
+  const serie = SERIER.find(s => s.name === name);
+  const cacheKey = issn || name;
+  delete NB_CACHE[cacheKey];
+  toast(`Henter NB-data for ${name}…`);
+  await hentNBOgVent(issn, name, serie?.mmsId || '');
+  renderSidebar();
+  if (ACTIVE_SERIE === name) {
+    const serie = SERIER.find(s => s.name === name);
+    if (serie) renderSerieView(serie);
+  } else {
+    visOverview();
+  }
+  document.getElementById('last-check').textContent = 'Oppdatert ' + new Date().toLocaleTimeString('nb-NO');
+}
+
+async function oppdaterAlle() {
+  const btn = document.getElementById('btn-oppdater');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Oppdaterer…';
+  const aktive = SERIER.filter(s => s.active !== false);
+  for (const s of aktive) {
+    const cacheKey = s.issnPrint || s.name;
+    delete NB_CACHE[cacheKey];
+    toast(`Henter ${s.name}…`, 1500);
+    await hentNBOgVent(s.issnPrint, s.name, s.mmsId || '');
+    renderSidebar();
+  }
+  btn.disabled = false;
+  btn.innerHTML = '🔄 Oppdater alle';
+  document.getElementById('last-check').textContent = 'Oppdatert ' + new Date().toLocaleTimeString('nb-NO');
+  if (!ACTIVE_SERIE) visOverview();
+  else { const s = SERIER.find(x => x.name === ACTIVE_SERIE); if(s) renderSerieView(s); }
+}
+
+// ── Hjelpere ───────────────────────────────────────────────────────────────────
+function getStatus(serie) {
+  const nb = NB_CACHE[serie.issnPrint || serie.name];
+  // Live CHECK_CACHE har prioritet
+  const cc = CHECK_CACHE[serie.name];
+  if (cc?.loading) return 'unknown';
+  if (cc?.result) {
+    return cc.result.mangler?.length > 0 ? 'warn' : 'ok';
+  }
+  if (!nb) return 'unknown';
+  const sd = STATUS_DATA?.serier?.find(s => s.name === serie.name);
+  if (sd?.mangler?.length > 0) return 'warn';
+  if (sd?.publisher_data?.js_rendered) return 'unknown';
+  if (sd) return 'ok';
+  return 'unknown';
+}
+
+function esc(s) { return String(s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
+
+function fmtDato(iso) {
+  if (!iso) return '–';
+  try { return new Date(iso).toLocaleString('nb-NO', { dateStyle:'short', timeStyle:'short' }); }
+  catch { return iso; }
+}
+
+let toastTimer;
+function toast(msg, dur = 3000) {
+  clearTimeout(toastTimer);
+  let el = document.querySelector('.toast');
+  if (!el) { el = document.createElement('div'); el.className = 'toast'; document.body.appendChild(el); }
+  el.textContent = msg;
+  el.style.display = 'block';
+  toastTimer = setTimeout(() => { if(el) el.style.display = 'none'; }, dur);
+}
+
+// ── Start ──────────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
