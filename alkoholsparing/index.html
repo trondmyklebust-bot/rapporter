@@ -278,7 +278,8 @@ function load() {
 }
 
 function save() {
-  localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+  catch (e) { /* privat modus e.l. – appen virker, men husker ikke mellom økter */ }
 }
 
 /* ── Helpers ── */
@@ -436,7 +437,7 @@ document.getElementById("undoBtn").addEventListener("click", () => {
 
 document.getElementById("resetBtn").addEventListener("click", () => {
   if (confirm("Slette alle registreringer og tilbakestille priser?")) {
-    localStorage.removeItem(STORE_KEY);
+    try { localStorage.removeItem(STORE_KEY); } catch (e) {}
     state = load();
     save(); renderAll();
     toast("Alt nullstilt");
