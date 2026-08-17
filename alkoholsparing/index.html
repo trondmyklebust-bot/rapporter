@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Spart – alkoholsparing</title>
+<meta name="description" content="Logg hver gang du dropper en enhet, og se hvor mye penger og kalorier du sparer.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#0d7369">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --teal:       #0d7369;
+  --teal-dark:  #064e47;
+  --gold:       #facc15;
+  --bg:         #f2f5f4;
+  --card:       #ffffff;
+  --text:       #17332f;
+  --muted:      #5f7672;
+  --border:     #dbe5e2;
+  --danger:     #b3392f;
+  --shadow:     0 1px 4px rgba(10, 60, 54, 0.10);
+  --beer:       #f5e2b8;
+  --beer-ink:   #7a5a12;
+  --white-wine: #f4efd3;
+  --white-ink:  #6d6420;
+  --red-wine:   #f3dcdc;
+  --red-ink:    #7c2430;
+  --rose-wine:  #fae0e8;
+  --rose-ink:   #99365c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:         #101b19;
+    --card:       #1a2926;
+    --text:       #e5efed;
+    --muted:      #93a8a4;
+    --border:     #2b3d3a;
+    --shadow:     0 1px 4px rgba(0, 0, 0, 0.4);
+    --beer:       #3a2f17;
+    --beer-ink:   #ecd9a0;
+    --white-wine: #35321a;
+    --white-ink:  #e7dfa2;
+    --red-wine:   #3c2124;
+    --red-ink:    #f0b9c0;
+    --rose-wine:  #3c2230;
+    --rose-ink:   #f2bcd4;
+  }
+}
+
+html { -webkit-text-size-adjust: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  padding-bottom: calc(76px + env(safe-area-inset-bottom));
+}
+
+/* ── Header ── */
+header {
+  background: linear-gradient(160deg, var(--teal), var(--teal-dark));
+  color: #fff;
+  padding: calc(16px + env(safe-area-inset-top)) 20px 22px;
+  border-radius: 0 0 22px 22px;
+}
+header h1 { font-size: 20px; font-weight: 800; letter-spacing: 0.3px; display: flex; align-items: center; gap: 8px; }
+header .tagline { font-size: 12.5px; opacity: 0.85; margin-top: 3px; }
+
+.totals { display: flex; gap: 12px; margin-top: 18px; }
+.total-box {
+  flex: 1; background: rgba(255,255,255,0.12); border-radius: 14px; padding: 12px 14px;
+  backdrop-filter: blur(4px);
+}
+.total-box .num { font-size: 26px; font-weight: 800; line-height: 1.1; }
+.total-box .num small { font-size: 14px; font-weight: 600; opacity: 0.85; }
+.total-box .lbl { font-size: 11.5px; opacity: 0.8; margin-top: 3px; text-transform: uppercase; letter-spacing: 0.5px; }
+.equiv { font-size: 12px; opacity: 0.8; margin-top: 12px; min-height: 15px; }
+
+.period-tabs { display: flex; gap: 6px; margin-top: 16px; }
+.period-tabs button {
+  flex: 1; border: 0; border-radius: 999px; padding: 7px 4px; font-size: 12.5px; font-weight: 600;
+  background: rgba(255,255,255,0.14); color: #fff; cursor: pointer;
+}
+.period-tabs button.active { background: #fff; color: var(--teal-dark); }
+
+/* ── Main ── */
+main { padding: 18px 16px 8px; max-width: 520px; margin: 0 auto; }
+.section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); margin: 6px 2px 10px; }
+
+/* Drink buttons */
+.drinks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.drink-btn {
+  border: 1px solid var(--border); border-radius: 16px; background: var(--card);
+  padding: 14px 12px; text-align: left; cursor: pointer; box-shadow: var(--shadow);
+  display: flex; align-items: center; gap: 10px; font-family: inherit; color: var(--text);
+  transition: transform 0.08s;
+}
+.drink-btn:active { transform: scale(0.96); }
+.drink-btn .emoji {
+  width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+  font-size: 22px; flex-shrink: 0;
+}
+.drink-btn[data-type="beer33"] .emoji, .drink-btn[data-type="beer50"] .emoji { background: var(--beer); }
+.drink-btn[data-type="white"] .emoji { background: var(--white-wine); }
+.drink-btn[data-type="red"] .emoji { background: var(--red-wine); }
+.drink-btn[data-type="rose"] .emoji { background: var(--rose-wine); }
+.drink-btn .name { font-size: 14.5px; font-weight: 700; line-height: 1.2; }
+.drink-btn .meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+.undo-row { margin-top: 12px; text-align: center; }
+.undo-row button {
+  border: 0; background: none; color: var(--muted); font-size: 13px; font-weight: 600;
+  cursor: pointer; padding: 8px 14px; font-family: inherit;
+}
+.undo-row button:disabled { opacity: 0.35; }
+
+/* ── History ── */
+.day-group { margin-bottom: 16px; }
+.day-head { display: flex; justify-content: space-between; align-items: baseline; margin: 0 2px 7px; }
+.day-head .d { font-size: 13px; font-weight: 700; }
+.day-head .sum { font-size: 12px; color: var(--muted); }
+.entry {
+  display: flex; align-items: center; gap: 10px; background: var(--card); border: 1px solid var(--border);
+  border-radius: 12px; padding: 9px 12px; margin-bottom: 6px; box-shadow: var(--shadow);
+}
+.entry .e { font-size: 18px; }
+.entry .info { flex: 1; min-width: 0; }
+.entry .n { font-size: 13.5px; font-weight: 600; }
+.entry .t { font-size: 11px; color: var(--muted); }
+.entry .v { font-size: 12px; color: var(--muted); text-align: right; line-height: 1.35; }
+.entry .del {
+  border: 0; background: none; color: var(--muted); font-size: 16px; cursor: pointer; padding: 6px;
+  line-height: 1; font-family: inherit;
+}
+.empty { text-align: center; color: var(--muted); font-size: 13.5px; padding: 30px 10px; }
+
+/* ── Settings ── */
+.setting-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+  padding: 12px 14px; margin-bottom: 10px; box-shadow: var(--shadow);
+}
+.setting-card .head { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; margin-bottom: 10px; }
+.setting-fields { display: flex; gap: 10px; }
+.field { flex: 1; }
+.field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 600; }
+.field input {
+  width: 100%; border: 1px solid var(--border); border-radius: 9px; padding: 9px 10px;
+  font-size: 15px; font-family: inherit; background: var(--bg); color: var(--text);
+}
+.danger-zone { margin-top: 22px; text-align: center; }
+.danger-zone button {
+  border: 1px solid var(--danger); color: var(--danger); background: none; border-radius: 10px;
+  padding: 10px 18px; font-size: 13.5px; font-weight: 600; cursor: pointer; font-family: inherit;
+}
+.settings-note { font-size: 12px; color: var(--muted); margin: 4px 2px 14px; line-height: 1.45; }
+
+/* ── Bottom nav ── */
+nav {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--card); border-top: 1px solid var(--border);
+  display: flex; padding-bottom: env(safe-area-inset-bottom);
+  box-shadow: 0 -2px 10px rgba(10,60,54,0.06);
+}
+nav button {
+  flex: 1; border: 0; background: none; padding: 9px 4px 7px; cursor: pointer; font-family: inherit;
+  color: var(--muted); font-size: 10.5px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+nav button .ic { font-size: 21px; line-height: 1; }
+nav button.active { color: var(--teal); }
+@media (prefers-color-scheme: dark) { nav button.active { color: #4fd1c5; } }
+
+/* ── Toast ── */
+#toast {
+  position: fixed; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom));
+  transform: translateX(-50%) translateY(20px);
+  background: var(--teal-dark); color: #fff; font-size: 13.5px; font-weight: 600;
+  padding: 10px 18px; border-radius: 999px; opacity: 0; pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s; box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+  max-width: 90vw; text-align: center;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+.view { display: none; }
+.view.active { display: block; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🍺 Spart!</h1>
+  <div class="tagline">Logg hver enhet du dropper – se hva du sparer.</div>
+  <div class="period-tabs" id="periodTabs">
+    <button data-p="day">I dag</button>
+    <button data-p="week">Uke</button>
+    <button data-p="month">Måned</button>
+    <button data-p="all">Totalt</button>
+  </div>
+  <div class="totals">
+    <div class="total-box">
+      <div class="num" id="totKr">0<small> kr</small></div>
+      <div class="lbl">spart</div>
+    </div>
+    <div class="total-box">
+      <div class="num" id="totKcal">0<small> kcal</small></div>
+      <div class="lbl">unngått</div>
+    </div>
+  </div>
+  <div class="equiv" id="equiv"></div>
+</header>
+
+<main>
+  <!-- HJEM -->
+  <section class="view active" id="view-home">
+    <div class="section-title">Jeg droppet en …</div>
+    <div class="drinks" id="drinks"></div>
+    <div class="undo-row"><button id="undoBtn" disabled>↩︎ Angre siste</button></div>
+  </section>
+
+  <!-- HISTORIKK -->
+  <section class="view" id="view-history">
+    <div class="section-title">Historikk</div>
+    <div id="historyList"></div>
+  </section>
+
+  <!-- INNSTILLINGER -->
+  <section class="view" id="view-settings">
+    <div class="section-title">Priser og kalorier</div>
+    <div class="settings-note">Juster pris (kr) og kalorier (kcal) per enhet. Endringene gjelder nye registreringer – det du alt har logget beholder verdiene fra da du logget.</div>
+    <div id="settingsList"></div>
+    <div class="danger-zone">
+      <button id="resetBtn">Slett alle data</button>
+    </div>
+  </section>
+</main>
+
+<nav>
+  <button data-view="home" class="active"><span class="ic">🍻</span>Logg</button>
+  <button data-view="history"><span class="ic">📅</span>Historikk</button>
+  <button data-view="settings"><span class="ic">⚙️</span>Innstillinger</button>
+</nav>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+/* ── Data ── */
+const STORE_KEY = "alkoholsparing.v1";
+
+const TYPES = [
+  { id: "beer33", emoji: "🍺", name: "Øl 0,33 l",      defPrice: 95,  defKcal: 140 },
+  { id: "beer50", emoji: "🍺", name: "Øl 0,5 l",       defPrice: 135, defKcal: 215 },
+  { id: "white",  emoji: "🥂", name: "Glass hvitvin",  defPrice: 135, defKcal: 120 },
+  { id: "red",    emoji: "🍷", name: "Glass rødvin",   defPrice: 135, defKcal: 125 },
+  { id: "rose",   emoji: "🌸", name: "Glass rosé",     defPrice: 135, defKcal: 115 },
+];
+const TYPE_BY_ID = Object.fromEntries(TYPES.map(t => [t.id, t]));
+
+let state = load();
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) {
+      const s = JSON.parse(raw);
+      if (s && Array.isArray(s.entries) && s.prices) return s;
+    }
+  } catch (e) { /* korrupt lagring – start på nytt */ }
+  const prices = {};
+  for (const t of TYPES) prices[t.id] = { price: t.defPrice, kcal: t.defKcal };
+  return { entries: [], prices, period: "all" };
+}
+
+function save() {
+  localStorage.setItem(STORE_KEY, JSON.stringify(state));
+}
+
+/* ── Helpers ── */
+const fmt = new Intl.NumberFormat("nb-NO", { maximumFractionDigits: 0 });
+
+function startOfDay(d)  { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+function startOfWeek(d) { const x = startOfDay(d); const dow = (x.getDay() + 6) % 7; x.setDate(x.getDate() - dow); return x; } // mandag
+function startOfMonth(d){ const x = startOfDay(d); x.setDate(1); return x; }
+
+function periodStart(p) {
+  const now = new Date();
+  if (p === "day")   return startOfDay(now).getTime();
+  if (p === "week")  return startOfWeek(now).getTime();
+  if (p === "month") return startOfMonth(now).getTime();
+  return 0;
+}
+
+function entriesIn(p) {
+  const from = periodStart(p);
+  return state.entries.filter(e => e.ts >= from);
+}
+
+function dayLabel(ts) {
+  const d = startOfDay(new Date(ts)).getTime();
+  const today = startOfDay(new Date()).getTime();
+  if (d === today) return "I dag";
+  if (d === today - 86400000) return "I går";
+  return new Date(ts).toLocaleDateString("nb-NO", { weekday: "long", day: "numeric", month: "long" });
+}
+
+/* ── Render: totals ── */
+function renderTotals() {
+  const list = entriesIn(state.period || "all");
+  const kr = list.reduce((s, e) => s + e.price, 0);
+  const kcal = list.reduce((s, e) => s + e.kcal, 0);
+  document.getElementById("totKr").innerHTML = fmt.format(kr) + "<small> kr</small>";
+  document.getElementById("totKcal").innerHTML = fmt.format(kcal) + "<small> kcal</small>";
+
+  const eq = [];
+  if (list.length > 0) eq.push(list.length + (list.length === 1 ? " enhet droppet" : " enheter droppet"));
+  const boller = Math.round(kcal / 250);
+  if (boller >= 1) eq.push("≈ " + boller + (boller === 1 ? " bolle 🥐" : " boller 🥐"));
+  const kino = Math.floor(kr / 150);
+  if (kino >= 1) eq.push("≈ " + kino + (kino === 1 ? " kinobillett 🎬" : " kinobilletter 🎬"));
+  document.getElementById("equiv").textContent = eq.join("  ·  ");
+
+  document.querySelectorAll("#periodTabs button").forEach(b =>
+    b.classList.toggle("active", b.dataset.p === (state.period || "all")));
+  document.getElementById("undoBtn").disabled = state.entries.length === 0;
+}
+
+/* ── Render: drink buttons ── */
+function renderDrinks() {
+  const el = document.getElementById("drinks");
+  el.innerHTML = "";
+  for (const t of TYPES) {
+    const p = state.prices[t.id] || { price: t.defPrice, kcal: t.defKcal };
+    const btn = document.createElement("button");
+    btn.className = "drink-btn";
+    btn.dataset.type = t.id;
+    btn.innerHTML =
+      '<span class="emoji">' + t.emoji + '</span>' +
+      '<span><span class="name">' + t.name + '</span><br>' +
+      '<span class="meta">' + fmt.format(p.price) + " kr · " + fmt.format(p.kcal) + " kcal</span></span>";
+    btn.addEventListener("click", () => logDrink(t.id));
+    el.appendChild(btn);
+  }
+}
+
+/* ── Render: history ── */
+function renderHistory() {
+  const el = document.getElementById("historyList");
+  el.innerHTML = "";
+  if (state.entries.length === 0) {
+    el.innerHTML = '<div class="empty">Ingenting logget ennå.<br>Dropp en enhet og trykk på den på Logg-siden! 💪</div>';
+    return;
+  }
+  const sorted = [...state.entries].sort((a, b) => b.ts - a.ts);
+  let curDay = null, group = null, dayKr = 0, dayKcal = 0, sumEl = null;
+  for (const e of sorted) {
+    const d = startOfDay(new Date(e.ts)).getTime();
+    if (d !== curDay) {
+      curDay = d; dayKr = 0; dayKcal = 0;
+      group = document.createElement("div");
+      group.className = "day-group";
+      const head = document.createElement("div");
+      head.className = "day-head";
+      head.innerHTML = '<span class="d">' + dayLabel(e.ts) + '</span><span class="sum"></span>';
+      sumEl = head.querySelector(".sum");
+      group.appendChild(head);
+      el.appendChild(group);
+    }
+    dayKr += e.price; dayKcal += e.kcal;
+    sumEl.textContent = fmt.format(dayKr) + " kr · " + fmt.format(dayKcal) + " kcal";
+    const t = TYPE_BY_ID[e.type] || { emoji: "🍹", name: e.type };
+    const row = document.createElement("div");
+    row.className = "entry";
+    row.innerHTML =
+      '<span class="e">' + t.emoji + '</span>' +
+      '<span class="info"><div class="n">' + t.name + '</div>' +
+      '<div class="t">kl. ' + new Date(e.ts).toLocaleTimeString("nb-NO", { hour: "2-digit", minute: "2-digit" }) + '</div></span>' +
+      '<span class="v">' + fmt.format(e.price) + ' kr<br>' + fmt.format(e.kcal) + ' kcal</span>' +
+      '<button class="del" aria-label="Slett">✕</button>';
+    row.querySelector(".del").addEventListener("click", () => {
+      state.entries = state.entries.filter(x => x.id !== e.id);
+      save(); renderAll();
+    });
+    group.appendChild(row);
+  }
+}
+
+/* ── Render: settings ── */
+function renderSettings() {
+  const el = document.getElementById("settingsList");
+  el.innerHTML = "";
+  for (const t of TYPES) {
+    const p = state.prices[t.id];
+    const card = document.createElement("div");
+    card.className = "setting-card";
+    card.innerHTML =
+      '<div class="head">' + t.emoji + ' ' + t.name + '</div>' +
+      '<div class="setting-fields">' +
+      '<div class="field"><label>Pris (kr)</label><input type="number" inputmode="numeric" min="0" step="1" value="' + p.price + '" data-f="price"></div>' +
+      '<div class="field"><label>Kalorier (kcal)</label><input type="number" inputmode="numeric" min="0" step="1" value="' + p.kcal + '" data-f="kcal"></div>' +
+      '</div>';
+    card.querySelectorAll("input").forEach(inp => {
+      inp.addEventListener("change", () => {
+        const v = Math.max(0, Number(inp.value) || 0);
+        inp.value = v;
+        state.prices[t.id][inp.dataset.f] = v;
+        save(); renderDrinks(); renderTotals();
+      });
+    });
+    el.appendChild(card);
+  }
+}
+
+/* ── Actions ── */
+function logDrink(typeId) {
+  const p = state.prices[typeId];
+  const t = TYPE_BY_ID[typeId];
+  state.entries.push({
+    id: Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+    type: typeId, ts: Date.now(), price: p.price, kcal: p.kcal,
+  });
+  save(); renderAll();
+  if (navigator.vibrate) navigator.vibrate(30);
+  toast("💪 " + t.name + " droppet – " + fmt.format(p.price) + " kr og " + fmt.format(p.kcal) + " kcal spart!");
+}
+
+document.getElementById("undoBtn").addEventListener("click", () => {
+  const last = state.entries.pop();
+  if (last) { save(); renderAll(); toast("Angret: " + (TYPE_BY_ID[last.type]?.name || last.type)); }
+});
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  if (confirm("Slette alle registreringer og tilbakestille priser?")) {
+    localStorage.removeItem(STORE_KEY);
+    state = load();
+    save(); renderAll();
+    toast("Alt nullstilt");
+  }
+});
+
+document.getElementById("periodTabs").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  state.period = b.dataset.p;
+  save(); renderTotals();
+});
+
+/* ── Navigation ── */
+document.querySelectorAll("nav button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("nav button").forEach(b => b.classList.toggle("active", b === btn));
+    document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + btn.dataset.view));
+    if (btn.dataset.view === "history") renderHistory();
+  });
+});
+
+/* ── Toast ── */
+let toastTimer = null;
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+}
+
+function renderAll() { renderTotals(); renderDrinks(); renderHistory(); }
+
+renderAll();
+renderSettings();
+
+/* ── PWA ── */
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
+}
+</script>
+</body>
+</html>

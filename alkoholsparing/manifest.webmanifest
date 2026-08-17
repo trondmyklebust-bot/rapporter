@@ -1,0 +1,16 @@
+{
+  "name": "Spart – alkoholsparing",
+  "short_name": "Spart",
+  "description": "Logg hver gang du dropper en øl eller et glass vin, og se hvor mye penger og kalorier du sparer.",
+  "lang": "no",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0d7369",
+  "theme_color": "#0d7369",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
