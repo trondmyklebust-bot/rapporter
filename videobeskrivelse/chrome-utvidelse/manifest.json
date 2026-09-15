@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "NB videobeskrivelse",
+  "version": "0.1.0",
+  "description": "Beskriver videoer i Nettbiblioteket med gemma4 og NB-Whisper via en lokal server.",
+  "permissions": ["webRequest", "webNavigation", "storage", "tabs"],
+  "host_permissions": [
+    "https://*.nb.no/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.nb.no/items/*", "https://nb.no/items/*", "https://urn.nb.no/*"],
+      "js": ["content.js"],
+      "css": ["panel.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_ui": { "page": "options.html", "open_in_tab": false },
+  "icons": { "128": "ikoner/ikon128.png" }
+}

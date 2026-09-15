@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """
-Beskriv en video med gemma4 på NBs inferensserver.
+Beskriv en video med gemma4 (eller en annen multimodal modell) og NB-Whisper.
 
 Verken Ollama, LM Studio eller vLLM tar video som input, så skriptet trekker ut
 stillbilder med ffmpeg, sender dem til modellen og ber den beskrive forløpet.
+Med --transkriber trekkes lydsporet ut samtidig og sendes til NB-Whisper, og
+transkripsjonen flettes inn i sluttbeskrivelsen.
+
+Kilden kan være en lokal fil eller en URL ffmpeg kan lese, for eksempel en
+HLS-spilleliste (.m3u8) fra NBs Wowza-strømming. Med --referer sendes samme
+Referer som nettleseren brukte, i tilfelle strømmen krever det.
 
 Backend velges automatisk: svarer serveren på /api/version brukes Ollamas /api/chat
 (med think:false), ellers OpenAI-ruten /v1/chat/completions (LM Studio, vLLM).
@@ -12,7 +18,8 @@ Krever: python3 (kun standardbiblioteket), ffmpeg og ffprobe i PATH.
 
 Eksempler:
     python3 beskriv_video.py film.mp4
-    python3 beskriv_video.py film.mp4 --antall 12 --ut beskrivelse.json
+    python3 beskriv_video.py film.mp4 --antall 12 --transkriber --ut beskrivelse.json
+    python3 beskriv_video.py "https://.../playlist.m3u8" --referer https://www.nb.no/items/...
     NB_INFERENS_TOKEN=xxx python3 beskriv_video.py film.mp4 --modell gemma4:e4b
     python3 beskriv_video.py film.mp4 --url http://localhost:11434   # lokal Ollama
     python3 beskriv_video.py film.mp4 --url http://localhost:1234    # LM Studio, første modell
@@ -29,12 +36,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Callable
 
 STANDARD_URL = "https://api.inference.nb.no"
 STANDARD_MODELL = "gemma4:e4b"
+STANDARD_WHISPER_URL = (
+    "https://nb-whisper-large-predictor.inference.nb.no/v1/models/nb-whisper-large:predict"
+)
 
 # Hvor mange bilder som sendes i ett kall. Flere bilder gir bedre sammenheng,
 # men øker kontekstbruken. 8 bilder er trygt innenfor num_ctx=32768.
@@ -58,6 +70,16 @@ OPTIONS = {
     "num_predict": 1024,
 }
 
+Logg = Callable[[str], None]
+
+
+def _stderr(melding: str) -> None:
+    print(melding, file=sys.stderr, flush=True)
+
+
+class Feil(RuntimeError):
+    """Feil som skal vises til brukeren uten traceback."""
+
 
 # ---------------------------------------------------------------------------
 # ffmpeg
@@ -66,41 +88,75 @@ OPTIONS = {
 def sjekk_verktoy() -> None:
     mangler = [v for v in ("ffmpeg", "ffprobe") if shutil.which(v) is None]
     if mangler:
-        sys.exit(f"Fant ikke {', '.join(mangler)} i PATH. Installer ffmpeg først.")
+        raise Feil(f"Fant ikke {', '.join(mangler)} i PATH. Installer ffmpeg først.")
 
 
-def varighet_sekunder(video: Path) -> float:
-    r = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
-        capture_output=True, text=True, check=True,
-    )
+def er_url(kilde: str) -> bool:
+    return kilde.startswith(("http://", "https://"))
+
+
+def _inn_args(kilde: str, referer: str | None, user_agent: str | None) -> list[str]:
+    """Argumenter foran -i: HTTP-hoder når kilden er en URL."""
+    args: list[str] = []
+    if er_url(kilde):
+        hoder = []
+        if referer:
+            hoder.append(f"Referer: {referer}")
+        if user_agent:
+            hoder.append(f"User-Agent: {user_agent}")
+        if hoder:
+            args += ["-headers", "\r\n".join(hoder) + "\r\n"]
+    return args + ["-i", kilde]
+
+
+def _kjor(kommando: list[str]) -> subprocess.CompletedProcess:
+    r = subprocess.run(kommando, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise Feil(f"{kommando[0]} feilet: {r.stderr.strip()[-800:]}")
+    return r
+
+
+def varighet_sekunder(kilde: str, referer: str | None = None, user_agent: str | None = None) -> float:
+    hoder = _inn_args(kilde, referer, user_agent)[:-2]  # ffprobe tar -headers, men ikke -i
+    r = _kjor(["ffprobe", "-v", "error", *hoder, "-show_entries", "format=duration",
+               "-of", "default=noprint_wrappers=1:nokey=1", kilde])
     try:
-        return float(r.stdout.strip())
-    except ValueError:
-        sys.exit(f"Klarte ikke lese varighet fra ffprobe: {r.stdout!r}")
+        return float(r.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        raise Feil(f"Klarte ikke lese varighet fra ffprobe: {r.stdout!r}")
 
 
-def trekk_ut_bilder(video: Path, antall: int, bredde: int, mappe: Path) -> list[tuple[float, Path]]:
+def trekk_ut_bilder(kilde: str, antall: int, bredde: int, mappe: Path, varighet: float,
+                    referer: str | None = None, user_agent: str | None = None,
+                    logg: Logg = _stderr) -> list[tuple[float, Path]]:
     """Hent `antall` bilder jevnt fordelt over videoen. Returnerer (sekund, fil)."""
-    varighet = varighet_sekunder(video)
     if varighet <= 0:
-        sys.exit("Videoen har ingen varighet.")
+        raise Feil("Videoen har ingen varighet.")
     antall = max(1, min(antall, int(varighet) or 1))
     bilder: list[tuple[float, Path]] = []
     for i in range(antall):
         t = varighet * (i + 0.5) / antall
         ut = mappe / f"bilde_{i + 1:03d}.jpg"
-        subprocess.run(
-            ["ffmpeg", "-v", "error", "-y", "-ss", f"{t:.3f}", "-i", str(video),
-             "-frames:v", "1", "-vf", f"scale={bredde}:-2", "-q:v", "3", str(ut)],
-            check=True,
-        )
+        _kjor(["ffmpeg", "-v", "error", "-y", "-ss", f"{t:.3f}",
+               *_inn_args(kilde, referer, user_agent),
+               "-frames:v", "1", "-vf", f"scale={bredde}:-2", "-q:v", "3", str(ut)])
         if ut.exists():
             bilder.append((t, ut))
+            logg(f"  bilde {i + 1}/{antall} ved {tidsstempel(t)}")
     if not bilder:
-        sys.exit("ffmpeg produserte ingen bilder.")
+        raise Feil("ffmpeg produserte ingen bilder.")
     return bilder
+
+
+def trekk_ut_lyd(kilde: str, mappe: Path, referer: str | None = None,
+                 user_agent: str | None = None) -> Path:
+    """Lydsporet som 16 kHz mono AAC (m4a), lite nok til å sendes base64-kodet."""
+    ut = mappe / "lyd.m4a"
+    _kjor(["ffmpeg", "-v", "error", "-y", *_inn_args(kilde, referer, user_agent),
+           "-vn", "-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "48k", str(ut)])
+    if not ut.exists() or ut.stat().st_size == 0:
+        raise Feil("ffmpeg produserte ingen lydfil. Har videoen lydspor?")
+    return ut
 
 
 def tidsstempel(sek: float) -> str:
@@ -110,7 +166,7 @@ def tidsstempel(sek: float) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Ollama
+# HTTP
 # ---------------------------------------------------------------------------
 
 def _post_json(url: str, token: str | None, payload: dict, timeout: int) -> dict:
@@ -125,9 +181,9 @@ def _post_json(url: str, token: str | None, payload: dict, timeout: int) -> dict
             return json.loads(svar.read())
     except urllib.error.HTTPError as e:
         kropp = e.read().decode(errors="replace")
-        sys.exit(f"HTTP {e.code} fra {url}: {kropp[:500]}")
+        raise Feil(f"HTTP {e.code} fra {url}: {kropp[:500]}")
     except urllib.error.URLError as e:
-        sys.exit(f"Fikk ikke kontakt med {url}: {e.reason}")
+        raise Feil(f"Fikk ikke kontakt med {url}: {e.reason}")
 
 
 def _get_json(url: str, token: str | None, timeout: int = 10) -> dict | None:
@@ -141,6 +197,10 @@ def _get_json(url: str, token: str | None, timeout: int = 10) -> dict | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Språkmodell (Ollama eller OpenAI-rute)
+# ---------------------------------------------------------------------------
+
 def finn_backend(url: str, token: str | None) -> str:
     """'ollama' hvis serveren svarer på /api/version, ellers 'openai'."""
     if _get_json(f"{url.rstrip('/')}/api/version", token) is not None:
@@ -152,8 +212,12 @@ def forste_modell(url: str, token: str | None) -> str:
     data = _get_json(f"{url.rstrip('/')}/v1/models", token)
     modeller = [m.get("id") for m in (data or {}).get("data", []) if m.get("id")]
     if not modeller:
-        sys.exit(f"Fant ingen modeller på {url}/v1/models. Oppgi --modell.")
+        raise Feil(f"Fant ingen modeller på {url}/v1/models. Oppgi --modell.")
     return modeller[0]
+
+
+def base64_fil(sti: Path) -> str:
+    return base64.b64encode(sti.read_bytes()).decode()
 
 
 def chat(backend: str, url: str, token: str | None, modell: str,
@@ -193,10 +257,6 @@ def chat(backend: str, url: str, token: str | None, modell: str,
     return (valg[0].get("message") or {}).get("content", "").strip()
 
 
-def base64_fil(sti: Path) -> str:
-    return base64.b64encode(sti.read_bytes()).decode()
-
-
 def beskriv_gruppe(backend, url, token, modell, gruppe, del_nr, antall_deler, varighet, timeout) -> str:
     tider = ", ".join(tidsstempel(t) for t, _ in gruppe)
     if antall_deler > 1:
@@ -218,17 +278,167 @@ def oppsummer(backend, url, token, modell, delbeskrivelser: list[str], varighet,
     return chat(backend, url, token, modell, SYSTEM_PROMPT, tekst, [], timeout)
 
 
+def flett_inn_transkripsjon(backend, url, token, modell, visuell: str, transkripsjon: str,
+                            varighet, timeout) -> str:
+    """Kombiner bildebeskrivelsen med det som blir sagt til én sluttbeskrivelse."""
+    tekst = (f"En video som varer {tidsstempel(varighet)} er beskrevet på to måter. "
+             "Først en beskrivelse av det som er synlig, laget ut fra stillbilder. "
+             "Deretter en transkripsjon av det som blir sagt, laget av en talegjenkjenner "
+             "som kan ha feil i navn og enkeltord. Skriv én samlet beskrivelse av videoen "
+             "på norsk bokmål: hva den handler om, hva som vises, og hva som sies. "
+             "Bruk transkripsjonen til å forstå tema, personer og hendelser, men ikke "
+             "gjengi den ordrett. Vær nøktern og ikke dikt opp noe.\n\n"
+             f"BILDEBESKRIVELSE:\n{visuell}\n\nTRANSKRIPSJON:\n{transkripsjon}")
+    return chat(backend, url, token, modell, SYSTEM_PROMPT, tekst, [], timeout)
+
+
 # ---------------------------------------------------------------------------
-# Hovedløp
+# NB-Whisper
+# ---------------------------------------------------------------------------
+
+def transkriber(lydfil: Path, whisper_url: str = STANDARD_WHISPER_URL, sprak: str = "no",
+                timeout: int = 900) -> dict:
+    """Send lydfila til NB-Whisper. Returnerer {"tekst": str, "segmenter": [...]}."""
+    payload = {"file": base64_fil(lydfil), "language": sprak, "response_format": "json"}
+    data = _post_json(whisper_url, None, payload, timeout)
+    segmenter = []
+    for seg in data.get("content") or []:
+        if not isinstance(seg, dict):
+            continue
+        segmenter.append({
+            "start": seg.get("start"),
+            "slutt": seg.get("end"),
+            "taler": seg.get("speaker"),
+            "tekst": (seg.get("text") or "").strip(),
+        })
+    tekst = (data.get("text") or "").strip()
+    if not tekst and segmenter:
+        tekst = " ".join(s["tekst"] for s in segmenter if s["tekst"])
+    return {"tekst": tekst, "segmenter": segmenter}
+
+
+def transkripsjon_som_tekst(t: dict) -> str:
+    """Transkripsjon med taler og tidspunkt per segment, egnet som prompt-innhold."""
+    linjer = []
+    for s in t.get("segmenter") or []:
+        if not s["tekst"]:
+            continue
+        prefiks = ""
+        if s.get("start") is not None:
+            prefiks += f"[{tidsstempel(float(s['start']))}] "
+        if s.get("taler"):
+            prefiks += f"{s['taler']}: "
+        linjer.append(prefiks + s["tekst"])
+    return "\n".join(linjer) if linjer else t.get("tekst", "")
+
+
+# ---------------------------------------------------------------------------
+# Hovedløp, brukt av både kommandolinja og server.py
 # ---------------------------------------------------------------------------
 
 def grupper(liste, storrelse):
     return [liste[i:i + storrelse] for i in range(0, len(liste), storrelse)]
 
 
+def analyser(kilde: str, *, antall: int = 8, bredde: int = 768, url: str = STANDARD_URL,
+             token: str | None = None, modell: str | None = None, backend: str = "auto",
+             per_kall: int = BILDER_PER_KALL, timeout: int = 600, transkriber_lyd: bool = False,
+             whisper_url: str = STANDARD_WHISPER_URL, sprak: str = "no",
+             referer: str | None = None, user_agent: str | None = None,
+             mappe: Path | None = None, logg: Logg = _stderr) -> dict:
+    """
+    Kjør hele løpet: bilder → modell, og (valgfritt) lyd → Whisper parallelt,
+    deretter én sluttbeskrivelse. Returnerer et resultat-dict (samme som --ut).
+    """
+    if not er_url(kilde) and not Path(kilde).is_file():
+        raise Feil(f"Fant ikke videofila {kilde}")
+    sjekk_verktoy()
+
+    backend = finn_backend(url, token) if backend == "auto" else backend
+    if modell is None:
+        modell = STANDARD_MODELL if backend == "ollama" else forste_modell(url, token)
+    logg(f"Backend: {backend} på {url}, modell {modell}")
+
+    tmp = None
+    if mappe is None:
+        tmp = tempfile.TemporaryDirectory(prefix="videobeskrivelse_")
+        mappe = Path(tmp.name)
+    mappe.mkdir(parents=True, exist_ok=True)
+
+    resultat: dict = {"kilde": kilde, "modell": modell, "backend": backend, "url": url}
+    try:
+        varighet = varighet_sekunder(kilde, referer, user_agent)
+        resultat["varighet_sekunder"] = round(varighet, 3)
+        logg(f"Varighet {tidsstempel(varighet)}")
+
+        # Lyd → Whisper i egen tråd, samtidig med bildene.
+        lydresultat: dict = {}
+
+        def lydjobb():
+            try:
+                logg("Trekker ut lydspor ...")
+                lydfil = trekk_ut_lyd(kilde, mappe, referer, user_agent)
+                logg(f"Sender {lydfil.stat().st_size // 1024} kB lyd til NB-Whisper ...")
+                lydresultat["transkripsjon"] = transkriber(lydfil, whisper_url, sprak, timeout)
+                logg("Transkripsjon klar")
+            except Exception as e:  # noqa: BLE001 - feilen rapporteres i resultatet
+                lydresultat["feil"] = str(e)
+                logg(f"Transkripsjon feilet: {e}")
+
+        trad = None
+        if transkriber_lyd:
+            trad = threading.Thread(target=lydjobb, daemon=True)
+            trad.start()
+
+        logg(f"Trekker ut {antall} bilder ...")
+        bilder = trekk_ut_bilder(kilde, antall, bredde, mappe, varighet, referer, user_agent, logg)
+        resultat["bilder"] = [{"sekund": round(t, 3), "tid": tidsstempel(t), "fil": f.name}
+                              for t, f in bilder]
+
+        deler = grupper(bilder, max(1, per_kall))
+        delbeskrivelser = []
+        for i, gruppe in enumerate(deler, 1):
+            logg(f"Beskriver del {i}/{len(deler)} med {modell} ...")
+            delbeskrivelser.append(
+                beskriv_gruppe(backend, url, token, modell, gruppe, i, len(deler), varighet, timeout)
+            )
+        resultat["delbeskrivelser"] = delbeskrivelser
+
+        if len(delbeskrivelser) == 1:
+            visuell = delbeskrivelser[0]
+        else:
+            logg("Oppsummerer delene ...")
+            visuell = oppsummer(backend, url, token, modell, delbeskrivelser, varighet, timeout)
+        resultat["bildebeskrivelse"] = visuell
+        beskrivelse = visuell
+
+        if trad is not None:
+            if trad.is_alive():
+                logg("Venter på transkripsjonen ...")
+            trad.join()
+            if "transkripsjon" in lydresultat:
+                t = lydresultat["transkripsjon"]
+                resultat["transkripsjon"] = t
+                if t.get("tekst"):
+                    logg("Fletter inn transkripsjonen ...")
+                    beskrivelse = flett_inn_transkripsjon(
+                        backend, url, token, modell, visuell, transkripsjon_som_tekst(t),
+                        varighet, timeout)
+                else:
+                    logg("Transkripsjonen var tom, bruker bare bildebeskrivelsen")
+            else:
+                resultat["transkripsjon_feil"] = lydresultat.get("feil", "ukjent feil")
+
+        resultat["beskrivelse"] = beskrivelse
+        return resultat
+    finally:
+        if tmp:
+            tmp.cleanup()
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Beskriv en video med gemma4 via NBs inferensserver.")
-    p.add_argument("video", type=Path, help="videofil (mp4, mov, mkv, ...)")
+    p.add_argument("video", help="videofil (mp4, mov, mkv, ...) eller URL, f.eks. en .m3u8-spilleliste")
     p.add_argument("--antall", type=int, default=8,
                    help="antall stillbilder som trekkes ut, jevnt fordelt (standard 8)")
     p.add_argument("--bredde", type=int, default=768,
@@ -244,67 +454,32 @@ def main() -> None:
     p.add_argument("--per-kall", type=int, default=BILDER_PER_KALL,
                    help=f"bilder per modellkall før oppsummering (standard {BILDER_PER_KALL})")
     p.add_argument("--timeout", type=int, default=600, help="sekunder per modellkall (standard 600)")
+    p.add_argument("--transkriber", action="store_true",
+                   help="send lydsporet til NB-Whisper og flett transkripsjonen inn i beskrivelsen")
+    p.add_argument("--whisper-url", default=os.environ.get("NB_WHISPER_URL", STANDARD_WHISPER_URL),
+                   help="NB-Whisper-endepunkt (standard fra NB_WHISPER_URL)")
+    p.add_argument("--sprak", default="no", help="språk for Whisper (standard no)")
+    p.add_argument("--referer", help="Referer-hode ffmpeg sender når kilden er en URL")
+    p.add_argument("--user-agent", help="User-Agent-hode ffmpeg sender når kilden er en URL")
     p.add_argument("--ut", type=Path, help="skriv resultat som JSON til denne fila")
     p.add_argument("--behold-bilder", type=Path, metavar="MAPPE",
-                   help="lagre stillbildene i denne mappa i stedet for å slette dem")
+                   help="lagre stillbildene (og lydfila) i denne mappa i stedet for å slette dem")
     a = p.parse_args()
 
-    if not a.video.is_file():
-        sys.exit(f"Fant ikke videofila {a.video}")
-    sjekk_verktoy()
-
-    backend = finn_backend(a.url, a.token) if a.backend == "auto" else a.backend
-    if a.modell is None:
-        a.modell = STANDARD_MODELL if backend == "ollama" else forste_modell(a.url, a.token)
-    print(f"Backend: {backend} på {a.url}, modell {a.modell}", file=sys.stderr)
-
-    if a.behold_bilder:
-        a.behold_bilder.mkdir(parents=True, exist_ok=True)
-        mappe = a.behold_bilder
-        tmp = None
-    else:
-        tmp = tempfile.TemporaryDirectory(prefix="videobeskrivelse_")
-        mappe = Path(tmp.name)
-
     try:
-        print(f"Trekker ut {a.antall} bilder fra {a.video.name} ...", file=sys.stderr)
-        varighet = varighet_sekunder(a.video)
-        bilder = trekk_ut_bilder(a.video, a.antall, a.bredde, mappe)
-        print(f"  {len(bilder)} bilder klare, varighet {tidsstempel(varighet)}", file=sys.stderr)
+        resultat = analyser(
+            a.video, antall=a.antall, bredde=a.bredde, url=a.url, token=a.token,
+            modell=a.modell, backend=a.backend, per_kall=a.per_kall, timeout=a.timeout,
+            transkriber_lyd=a.transkriber, whisper_url=a.whisper_url, sprak=a.sprak,
+            referer=a.referer, user_agent=a.user_agent, mappe=a.behold_bilder,
+        )
+    except Feil as e:
+        sys.exit(str(e))
 
-        deler = grupper(bilder, max(1, a.per_kall))
-        delbeskrivelser = []
-        for i, gruppe in enumerate(deler, 1):
-            print(f"Beskriver del {i}/{len(deler)} med {a.modell} ...", file=sys.stderr)
-            delbeskrivelser.append(
-                beskriv_gruppe(backend, a.url, a.token, a.modell, gruppe, i, len(deler), varighet, a.timeout)
-            )
-
-        if len(delbeskrivelser) == 1:
-            beskrivelse = delbeskrivelser[0]
-        else:
-            print("Oppsummerer delene ...", file=sys.stderr)
-            beskrivelse = oppsummer(backend, a.url, a.token, a.modell, delbeskrivelser, varighet, a.timeout)
-
-        print(beskrivelse)
-
-        if a.ut:
-            resultat = {
-                "video": str(a.video),
-                "varighet_sekunder": round(varighet, 3),
-                "modell": a.modell,
-                "backend": backend,
-                "url": a.url,
-                "bilder": [{"sekund": round(t, 3), "tid": tidsstempel(t), "fil": f.name}
-                           for t, f in bilder],
-                "delbeskrivelser": delbeskrivelser,
-                "beskrivelse": beskrivelse,
-            }
-            a.ut.write_text(json.dumps(resultat, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"Skrev {a.ut}", file=sys.stderr)
-    finally:
-        if tmp:
-            tmp.cleanup()
+    print(resultat["beskrivelse"])
+    if a.ut:
+        a.ut.write_text(json.dumps(resultat, ensure_ascii=False, indent=2), encoding="utf-8")
+        _stderr(f"Skrev {a.ut}")
 
 
 if __name__ == "__main__":

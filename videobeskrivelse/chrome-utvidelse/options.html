@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+<meta charset="utf-8">
+<title>NB videobeskrivelse – innstillinger</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; padding: 16px; width: 360px; color: #1a1a1a; }
+  label { display: block; margin: 10px 0 4px; font-weight: 600; }
+  input[type=text], input[type=number] { width: 100%; padding: 6px 8px; border: 1px solid #ccd; border-radius: 6px; font: inherit; box-sizing: border-box; }
+  button { margin-top: 14px; background: #1F4E79; color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; font: inherit; cursor: pointer; }
+  #status { color: #1a7a45; margin-left: 8px; }
+  p.hint { color: #6c757d; font-size: 13px; margin: 4px 0 0; }
+</style>
+</head>
+<body>
+  <h2 style="margin:0 0 6px;color:#1F4E79">NB videobeskrivelse</h2>
+  <label for="serverUrl">Lokal server</label>
+  <input type="text" id="serverUrl" placeholder="http://127.0.0.1:8765">
+  <p class="hint">Der <code>server.py</code> kjører. Inferens-URL, token og Whisper-URL settes som miljøvariabler når serveren startes.</p>
+  <label for="antall">Antall stillbilder</label>
+  <input type="number" id="antall" min="1" max="60">
+  <label><input type="checkbox" id="transkriber"> Send lyd til NB-Whisper</label>
+  <button id="lagre">Lagre</button><span id="status"></span>
+  <script src="options.js"></script>
+</body>
+</html>
