@@ -1,9 +1,20 @@
-# Videobeskrivelse med gemma4
+# Videobeskrivelse med gemma4 eller qwen3-vl
 
-Ollama på `api.inference.nb.no` tar ikke video som input, bare tekst og bilder.
-`beskriv_video.py` løser det ved å trekke ut stillbilder jevnt fordelt over
-videoen med ffmpeg, sende dem til gemma4 via Ollamas `/api/chat`, og be modellen
-beskrive forløpet på norsk.
+Verken Ollama på `api.inference.nb.no`, LM Studio eller vLLM tar video som
+input, bare tekst og bilder. `beskriv_video.py` løser det ved å trekke ut
+stillbilder jevnt fordelt over videoen med ffmpeg, sende dem til en
+multimodal modell og be den beskrive forløpet på norsk.
+
+Skriptet snakker med to typer server:
+
+| Backend | Rute | Typisk bruk |
+|---------|------|-------------|
+| Ollama | `/api/chat` med `think: false` | `api.inference.nb.no`, standardmodell `gemma4:e4b` |
+| OpenAI-kompatibel | `/v1/chat/completions` med bilder som data-URI | LM Studio på `localhost:1234`, vLLM |
+
+Backend velges automatisk: svarer serveren på `/api/version` er det Ollama,
+ellers brukes OpenAI-ruten. På LM Studio/vLLM brukes første modell i
+`/v1/models` hvis du ikke oppgir `--modell`.
 
 ## Krav
 
@@ -15,8 +26,13 @@ beskrive forløpet på norsk.
 
 ```bash
 export NB_INFERENS_TOKEN=xxx          # hvis gatewayen krever token
-python3 beskriv_video.py film.mp4
+python3 beskriv_video.py film.mp4                                   # NB-inferens, gemma4
+python3 beskriv_video.py film.mp4 --url http://localhost:1234       # LM Studio, første modell
+python3 beskriv_video.py film.mp4 --url http://localhost:1234 --modell qwen/qwen3-vl-8b
 ```
+
+Kjører du qwen3-vl, bruk LM Studio. På Ollama tenker qwen3-vl uansett og kan
+bruke hele token-budsjettet uten å svare. Gemma 4 tenker ikke og fungerer på begge.
 
 Nyttige valg:
 
@@ -26,7 +42,8 @@ Nyttige valg:
 | `--bredde 768` | bredde bildene skaleres til |
 | `--per-kall 8` | bilder per modellkall; flere kall oppsummeres etterpå |
 | `--modell gemma4:e4b` | modellnavn på serveren |
-| `--url http://localhost:11434` | annen Ollama-server, for eksempel lokal |
+| `--url http://localhost:11434` | annen server, for eksempel lokal Ollama eller LM Studio |
+| `--backend ollama` / `openai` | overstyr automatisk valg av rute |
 | `--ut resultat.json` | lagre bilder-tidspunkt, delbeskrivelser og sluttbeskrivelse som JSON |
 | `--behold-bilder MAPPE` | behold stillbildene for kontroll |
 
@@ -36,8 +53,8 @@ Beskrivelsen skrives til stdout, framdrift til stderr.
 
 1. `ffprobe` finner varigheten.
 2. `ffmpeg` henter ett bilde midt i hvert av N like lange intervaller.
-3. Bildene sendes base64-kodet i `images`-feltet, med tidsstempel i prompten,
-   og `think: false` slik skillen for inferensserveren anbefaler.
+3. Bildene sendes base64-kodet med tidsstempel i prompten: i `images`-feltet
+   og med `think: false` på Ollama, som `image_url`-data-URI på OpenAI-ruten.
 4. Er det flere bilder enn `--per-kall`, beskrives hver gruppe for seg, og et
    siste kall syr delbeskrivelsene sammen til én tekst.
 

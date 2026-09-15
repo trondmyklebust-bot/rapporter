@@ -2,8 +2,11 @@
 """
 Beskriv en video med gemma4 på NBs inferensserver.
 
-Ollama tar ikke video som input, så skriptet trekker ut stillbilder med ffmpeg,
-sender dem til gemma4 via Ollamas /api/chat og ber modellen beskrive forløpet.
+Verken Ollama, LM Studio eller vLLM tar video som input, så skriptet trekker ut
+stillbilder med ffmpeg, sender dem til modellen og ber den beskrive forløpet.
+
+Backend velges automatisk: svarer serveren på /api/version brukes Ollamas /api/chat
+(med think:false), ellers OpenAI-ruten /v1/chat/completions (LM Studio, vLLM).
 
 Krever: python3 (kun standardbiblioteket), ffmpeg og ffprobe i PATH.
 
@@ -12,6 +15,8 @@ Eksempler:
     python3 beskriv_video.py film.mp4 --antall 12 --ut beskrivelse.json
     NB_INFERENS_TOKEN=xxx python3 beskriv_video.py film.mp4 --modell gemma4:e4b
     python3 beskriv_video.py film.mp4 --url http://localhost:11434   # lokal Ollama
+    python3 beskriv_video.py film.mp4 --url http://localhost:1234    # LM Studio, første modell
+    python3 beskriv_video.py film.mp4 --url http://localhost:1234 --modell qwen/qwen3-vl-8b
 """
 
 from __future__ import annotations
@@ -108,39 +113,91 @@ def tidsstempel(sek: float) -> str:
 # Ollama
 # ---------------------------------------------------------------------------
 
-def ollama_chat(url: str, token: str | None, modell: str, meldinger: list[dict],
-                timeout: int) -> str:
-    payload = {
-        "model": modell,
-        "messages": meldinger,
-        "stream": False,
-        "think": False,
-        "options": OPTIONS,
-    }
+def _post_json(url: str, token: str | None, payload: dict, timeout: int) -> dict:
     req = urllib.request.Request(
-        f"{url.rstrip('/')}/api/chat",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+        url, data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"}, method="POST",
     )
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as svar:
-            data = json.loads(svar.read())
+            return json.loads(svar.read())
     except urllib.error.HTTPError as e:
         kropp = e.read().decode(errors="replace")
         sys.exit(f"HTTP {e.code} fra {url}: {kropp[:500]}")
     except urllib.error.URLError as e:
         sys.exit(f"Fikk ikke kontakt med {url}: {e.reason}")
-    return data.get("message", {}).get("content", "").strip()
+
+
+def _get_json(url: str, token: str | None, timeout: int = 10) -> dict | None:
+    req = urllib.request.Request(url)
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as svar:
+            return json.loads(svar.read())
+    except (urllib.error.URLError, ValueError, OSError):
+        return None
+
+
+def finn_backend(url: str, token: str | None) -> str:
+    """'ollama' hvis serveren svarer på /api/version, ellers 'openai'."""
+    if _get_json(f"{url.rstrip('/')}/api/version", token) is not None:
+        return "ollama"
+    return "openai"
+
+
+def forste_modell(url: str, token: str | None) -> str:
+    data = _get_json(f"{url.rstrip('/')}/v1/models", token)
+    modeller = [m.get("id") for m in (data or {}).get("data", []) if m.get("id")]
+    if not modeller:
+        sys.exit(f"Fant ingen modeller på {url}/v1/models. Oppgi --modell.")
+    return modeller[0]
+
+
+def chat(backend: str, url: str, token: str | None, modell: str,
+         system: str, tekst: str, bilder: list[Path], timeout: int) -> str:
+    """Send ett kall med tekst og eventuelle bilder, returner svaret som tekst."""
+    base = url.rstrip("/")
+    if backend == "ollama":
+        bruker = {"role": "user", "content": tekst}
+        if bilder:
+            bruker["images"] = [base64_fil(f) for f in bilder]
+        payload = {
+            "model": modell,
+            "messages": [{"role": "system", "content": system}, bruker],
+            "stream": False,
+            "think": False,
+            "options": OPTIONS,
+        }
+        data = _post_json(f"{base}/api/chat", token, payload, timeout)
+        return data.get("message", {}).get("content", "").strip()
+
+    # OpenAI-kompatibel rute (LM Studio, vLLM): bilder som data-URI i content-deler.
+    deler: list[dict] = [{"type": "text", "text": tekst}]
+    for f in bilder:
+        deler.append({"type": "image_url",
+                      "image_url": {"url": f"data:image/jpeg;base64,{base64_fil(f)}"}})
+    payload = {
+        "model": modell,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": deler}],
+        "stream": False,
+        "temperature": OPTIONS["temperature"],
+        "top_p": OPTIONS["top_p"],
+        "max_tokens": OPTIONS["num_predict"],
+    }
+    data = _post_json(f"{base}/v1/chat/completions", token, payload, timeout)
+    valg = data.get("choices") or [{}]
+    return (valg[0].get("message") or {}).get("content", "").strip()
 
 
 def base64_fil(sti: Path) -> str:
     return base64.b64encode(sti.read_bytes()).decode()
 
 
-def beskriv_gruppe(url, token, modell, gruppe, del_nr, antall_deler, varighet, timeout) -> str:
+def beskriv_gruppe(backend, url, token, modell, gruppe, del_nr, antall_deler, varighet, timeout) -> str:
     tider = ", ".join(tidsstempel(t) for t, _ in gruppe)
     if antall_deler > 1:
         innledning = (f"Dette er del {del_nr} av {antall_deler} av en video som varer "
@@ -149,24 +206,16 @@ def beskriv_gruppe(url, token, modell, gruppe, del_nr, antall_deler, varighet, t
         innledning = f"Videoen varer {tidsstempel(varighet)}. "
     tekst = (innledning + f"Bildene er tatt ved {tider}. "
              "Beskriv hva som skjer i denne delen av videoen.")
-    meldinger = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": tekst, "images": [base64_fil(f) for _, f in gruppe]},
-    ]
-    return ollama_chat(url, token, modell, meldinger, timeout)
+    return chat(backend, url, token, modell, SYSTEM_PROMPT, tekst, [f for _, f in gruppe], timeout)
 
 
-def oppsummer(url, token, modell, delbeskrivelser: list[str], varighet, timeout) -> str:
+def oppsummer(backend, url, token, modell, delbeskrivelser: list[str], varighet, timeout) -> str:
     deler = "\n\n".join(f"Del {i + 1}:\n{d}" for i, d in enumerate(delbeskrivelser))
     tekst = (f"Under følger beskrivelser av {len(delbeskrivelser)} påfølgende deler av en "
              f"video som varer {tidsstempel(varighet)}. Skriv én sammenhengende beskrivelse "
              "av hele videoen på norsk bokmål, i kronologisk rekkefølge, uten å gjenta deg. "
              "Start med en setning som oppsummerer hva videoen handler om.\n\n" + deler)
-    meldinger = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": tekst},
-    ]
-    return ollama_chat(url, token, modell, meldinger, timeout)
+    return chat(backend, url, token, modell, SYSTEM_PROMPT, tekst, [], timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +237,10 @@ def main() -> None:
                    help=f"Ollama-base-URL (standard {STANDARD_URL}, eller NB_INFERENS_URL)")
     p.add_argument("--token", default=os.environ.get("NB_INFERENS_TOKEN"),
                    help="Bearer-token (standard fra NB_INFERENS_TOKEN)")
-    p.add_argument("--modell", default=STANDARD_MODELL, help=f"modellnavn (standard {STANDARD_MODELL})")
+    p.add_argument("--modell", default=None,
+                   help=f"modellnavn (standard {STANDARD_MODELL} på Ollama, første modell i lista på LM Studio/vLLM)")
+    p.add_argument("--backend", choices=["auto", "ollama", "openai"], default="auto",
+                   help="auto (standard), ollama (/api/chat) eller openai (/v1/chat/completions for LM Studio/vLLM)")
     p.add_argument("--per-kall", type=int, default=BILDER_PER_KALL,
                    help=f"bilder per modellkall før oppsummering (standard {BILDER_PER_KALL})")
     p.add_argument("--timeout", type=int, default=600, help="sekunder per modellkall (standard 600)")
@@ -200,6 +252,11 @@ def main() -> None:
     if not a.video.is_file():
         sys.exit(f"Fant ikke videofila {a.video}")
     sjekk_verktoy()
+
+    backend = finn_backend(a.url, a.token) if a.backend == "auto" else a.backend
+    if a.modell is None:
+        a.modell = STANDARD_MODELL if backend == "ollama" else forste_modell(a.url, a.token)
+    print(f"Backend: {backend} på {a.url}, modell {a.modell}", file=sys.stderr)
 
     if a.behold_bilder:
         a.behold_bilder.mkdir(parents=True, exist_ok=True)
@@ -220,14 +277,14 @@ def main() -> None:
         for i, gruppe in enumerate(deler, 1):
             print(f"Beskriver del {i}/{len(deler)} med {a.modell} ...", file=sys.stderr)
             delbeskrivelser.append(
-                beskriv_gruppe(a.url, a.token, a.modell, gruppe, i, len(deler), varighet, a.timeout)
+                beskriv_gruppe(backend, a.url, a.token, a.modell, gruppe, i, len(deler), varighet, a.timeout)
             )
 
         if len(delbeskrivelser) == 1:
             beskrivelse = delbeskrivelser[0]
         else:
             print("Oppsummerer delene ...", file=sys.stderr)
-            beskrivelse = oppsummer(a.url, a.token, a.modell, delbeskrivelser, varighet, a.timeout)
+            beskrivelse = oppsummer(backend, a.url, a.token, a.modell, delbeskrivelser, varighet, a.timeout)
 
         print(beskrivelse)
 
@@ -236,6 +293,7 @@ def main() -> None:
                 "video": str(a.video),
                 "varighet_sekunder": round(varighet, 3),
                 "modell": a.modell,
+                "backend": backend,
                 "url": a.url,
                 "bilder": [{"sekund": round(t, 3), "tid": tidsstempel(t), "fil": f.name}
                            for t, f in bilder],
