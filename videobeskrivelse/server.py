@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -49,6 +50,19 @@ STORYBOARD_MAPPE = Path(__file__).resolve().parent / "storyboards"
 MODELL_CACHE: dict = {"tid": 0.0, "modeller": []}
 MODELL_CACHE_SEKUNDER = 300
 MODELL_LAS = threading.Lock()
+
+
+def versjon() -> str:
+    """Kortformen av git-commiten koden kjører fra, så det er synlig hva som kjører."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "ukjent"
 
 
 def modelliste(frisk: bool = False) -> list[dict]:
@@ -201,6 +215,9 @@ class Handler(BaseHTTPRequestHandler):
         if sti in ("", "/helse"):
             self._json(200, {
                 "ok": True,
+                "versjon": versjon(),
+                "ruter": ["/helse", "/jobb", "/jobb/<id>", "/jobber", "/modeller",
+                          "/storyboard/<id>"],
                 "inferens_url": INNSTILLINGER["url"],
                 "modell": INNSTILLINGER["modell"] or bv.STANDARD_MODELL,
                 "whisper_url": INNSTILLINGER["whisper_url"],

@@ -18,6 +18,7 @@ Tre deler:
 | `beskriv_video.py` | Kommandolinjeverktøy og kjernen (`analyser()`), kun standardbiblioteket |
 | `storyboard.py` | Bygger storyboardet som én selvstendig HTML-fil |
 | `server.py` | Lokal HTTP-server som Chrome-utvidelsen snakker med, kun standardbiblioteket |
+| `start.sh` | Stopper gammel server, starter ny, og bekrefter at riktig versjon svarer |
 | `chrome-utvidelse/` | Chrome-utvidelse som legger en «Beskriv video»-knapp på nb.no-sider |
 
 ### Hvorfor lyden deles i biter
@@ -119,12 +120,35 @@ Start serveren (den må kjøre så lenge du bruker utvidelsen):
 
 ```bash
 cd videobeskrivelse
-export NB_INFERENS_TOKEN=xxx     # om nødvendig
-python3 server.py                # lytter på http://127.0.0.1:8765
+./start.sh
 ```
 
+`start.sh` stopper først en server som allerede holder porten, venter til den
+er borte, starter en ny i bakgrunnen, og gir seg ikke før `/helse` svarer.
+Deretter skriver den hvilken git-versjon som kjører, hvilken modell den bruker,
+om ffmpeg finnes, og hvor mange modeller inferensserveren tilbyr. Da er det
+ingen tvil om hva som står bak porten.
+
+| Valg | Betydning |
+|------|-----------|
+| `--pull` | hent siste kode med `git pull` før start |
+| `--stopp` | bare stopp den som kjører |
+| `--port 8800` | annen port |
+| `--forgrunn` | kjør i dette vinduet i stedet for i bakgrunnen |
+
+Holder noe annet enn serveren porten, stopper skriptet og sier fra i stedet for
+å drepe prosessen. Starter serveren og dør med én gang, vises de siste linjene
+fra `server.logg`.
+
+Vil du heller styre det selv, virker `python3 server.py` som før.
+
 Miljøvariabler serveren leser: `NB_INFERENS_URL`, `NB_INFERENS_TOKEN`,
-`NB_INFERENS_MODELL`, `NB_WHISPER_URL`.
+`NB_INFERENS_MODELL`, `NB_WHISPER_URL`. Sett dem i samme vindu som du kjører
+`start.sh` fra, eller foran kommandoen:
+
+```bash
+NB_INFERENS_MODELL=gemma4:e4b ./start.sh
+```
 
 Last inn utvidelsen i Chrome:
 
@@ -151,7 +175,7 @@ ett kall per modell.
 
 | Rute | Hva |
 |------|-----|
-| `GET /helse` | status, hvilken inferens- og Whisper-adresse som brukes, om ffmpeg finnes |
+| `GET /helse` | status, git-versjon, rutene som finnes, inferens- og Whisper-adresse, om ffmpeg finnes |
 | `POST /jobb` | start en jobb. Body: `{"kilde": url, "referer": ..., "user_agent": ..., "antall": 8, "transkriber": true, "bit_sekunder": 20, "samtolk": true, "urn": ..., "tittel": ...}` |
 | `GET /jobb/<id>` | status (`kjører`, `ferdig`, `feil`), logg og resultat |
 | `GET /modeller` | modellene inferensserveren tilbyr, hver med om den kan se bilder. `?frisk` hopper over mellomlagringen |
