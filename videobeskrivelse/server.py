@@ -16,6 +16,7 @@ Ruter:
     POST /jobb             → {"id": "..."}   body: {"kilde": url, "referer": ..., "antall": 8,
                                                    "transkriber": true, "bit_sekunder": 20, ...}
     GET  /jobb/<id>        → {"status": "kjører"|"ferdig"|"feil", "logg": [...], "resultat": {...}}
+    GET  /modeller         → {"modeller": [{"navn", "syn", "kapabiliteter"}], "standard": "..."}
     GET  /storyboard/<id>  → storyboardet for jobben som ferdig HTML-side
     GET  /jobber           → liste over jobber
 """
@@ -29,6 +30,7 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -41,6 +43,43 @@ MAKS_JOBBER = 50
 
 # Storyboardene legges her og hentes via /storyboard/<id>.
 STORYBOARD_MAPPE = Path(__file__).resolve().parent / "storyboards"
+
+# Modellista hentes fra inferensserveren og holdes en stund, siden den
+# krever ett /api/show-kall per modell.
+MODELL_CACHE: dict = {"tid": 0.0, "modeller": []}
+MODELL_CACHE_SEKUNDER = 300
+MODELL_LAS = threading.Lock()
+
+
+def modelliste(frisk: bool = False) -> list[dict]:
+    """
+    Modellene serveren tilbyr, hver med om den kan se bilder.
+
+    `syn` er True, False, eller None når serveren ikke kunne svare på
+    hva modellen kan.
+    """
+    with MODELL_LAS:
+        fersk_nok = time.time() - MODELL_CACHE["tid"] < MODELL_CACHE_SEKUNDER
+        if MODELL_CACHE["modeller"] and fersk_nok and not frisk:
+            return MODELL_CACHE["modeller"]
+
+    url, token = INNSTILLINGER["url"], INNSTILLINGER["token"]
+    navn = bv.tilgjengelige_modeller(url, token)
+    if not navn:
+        return []
+    with ThreadPoolExecutor(max_workers=min(8, len(navn))) as pool:
+        kapabiliteter = list(pool.map(
+            lambda n: bv.modell_kapabiliteter(url, token, n), navn))
+    modeller = [
+        {"navn": n,
+         "syn": ("vision" in k) if k is not None else None,
+         "kapabiliteter": k or []}
+        for n, k in zip(navn, kapabiliteter)
+    ]
+    with MODELL_LAS:
+        MODELL_CACHE["modeller"] = modeller
+        MODELL_CACHE["tid"] = time.time()
+    return modeller
 
 INNSTILLINGER = {
     "url": os.environ.get("NB_INFERENS_URL", bv.STANDARD_URL),
@@ -167,6 +206,13 @@ class Handler(BaseHTTPRequestHandler):
                 "whisper_url": INNSTILLINGER["whisper_url"],
                 "bit_sekunder": bv.STANDARD_BIT_SEKUNDER,
                 "ffmpeg": bool(__import__("shutil").which("ffmpeg")),
+            })
+        elif sti == "/modeller":
+            frisk = "frisk" in self.path
+            modeller = modelliste(frisk)
+            self._json(200, {
+                "modeller": modeller,
+                "standard": INNSTILLINGER["modell"] or bv.STANDARD_MODELL,
             })
         elif sti.startswith("/storyboard/"):
             jobb_id = sti[len("/storyboard/"):]

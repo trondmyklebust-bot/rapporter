@@ -7,7 +7,7 @@ const STANDARD_SERVER = "http://127.0.0.1:8765";
 const POLL_MS = 2000;
 
 let serverUrl = STANDARD_SERVER;
-let innstillinger = { antall: 8, transkriber: true, bitSekunder: 20 };
+let innstillinger = { antall: 8, transkriber: true, bitSekunder: 20, modell: "" };
 let aktivJobb = null;
 let pollTimer = null;
 
@@ -44,9 +44,9 @@ function tittelFraSide() {
 
 async function hentInnstillinger() {
   try {
-    const l = await chrome.storage.sync.get({ serverUrl: STANDARD_SERVER, antall: 8, transkriber: true, bitSekunder: 20 });
+    const l = await chrome.storage.sync.get({ serverUrl: STANDARD_SERVER, antall: 8, transkriber: true, bitSekunder: 20, modell: "" });
     serverUrl = l.serverUrl || STANDARD_SERVER;
-    innstillinger = { antall: l.antall, transkriber: l.transkriber, bitSekunder: l.bitSekunder };
+    innstillinger = { antall: l.antall, transkriber: l.transkriber, bitSekunder: l.bitSekunder, modell: l.modell };
   } catch (_) { /* bruk standard */ }
 }
 
@@ -74,7 +74,7 @@ function stromFraVideoElement() {
 
 // ---------- panel ----------
 
-let panel, statusEl, feilEl, resultatEl, loggEl, startKnapp, antallInput, transkriberCb, bitInput;
+let panel, statusEl, feilEl, resultatEl, loggEl, startKnapp, antallInput, transkriberCb, bitInput, modellSelect, modellNote;
 
 function byggPanel() {
   if (panel) return;
@@ -95,13 +95,75 @@ function byggPanel() {
     el("label", {}, transkriberCb, el("span", { text: "Whisper" })),
     el("label", { title: "Sekunder per lydbit. 0 = hele lydsporet i ett." }, el("span", { text: "Bit s" }), bitInput)
   );
+  modellSelect = el("select", { class: "nbvb-modell", onchange: modellValgt },
+    el("option", { value: "", text: "Henter modeller …" }));
+  modellNote = el("span", { class: "nbvb-note" });
+  const modellRad = el("div", { class: "nbvb-rad" },
+    el("label", { class: "nbvb-modellrad" }, el("span", { text: "Modell" }), modellSelect),
+    modellNote
+  );
   statusEl = el("div", { class: "nbvb-status", text: "Klar." });
   feilEl = el("div", { class: "nbvb-feil", hidden: "" });
   resultatEl = el("div");
   loggEl = el("div", { class: "nbvb-logg", hidden: "" });
   const innhold = el("div", { class: "nbvb-innhold" }, statusEl, feilEl, resultatEl, loggEl);
-  panel.append(header, rad, innhold);
+  panel.append(header, rad, modellRad, innhold);
   document.documentElement.append(panel);
+  fyllModeller();
+}
+
+// Hent modellene serveren tilbyr og legg dem i nedtrekkslista. Modeller som
+// kan se bilder står øverst, siden en ren tekstmodell ikke kan beskrive video.
+async function fyllModeller() {
+  let data;
+  try {
+    data = await (await fetch(serverUrl + "/modeller")).json();
+  } catch (_) {
+    modellSelect.replaceChildren(el("option", { value: "", text: "Serveren svarer ikke" }));
+    return;
+  }
+  const liste = data.modeller || [];
+  if (!liste.length) {
+    modellSelect.replaceChildren(el("option", { value: "", text: "Fant ingen modeller" }));
+    return;
+  }
+  const standard = data.standard || "";
+  const merk = (m) => `${m.navn}${m.navn === standard ? " (standard)" : ""}`;
+  const ser = liste.filter((m) => m.syn === true);
+  const resten = liste.filter((m) => m.syn !== true);
+  const barn = [el("option", { value: "", text: `Standard (${standard})` })];
+  if (ser.length) {
+    const g = el("optgroup", { label: "Kan se bilder" });
+    for (const m of ser) g.append(el("option", { value: m.navn, text: merk(m) }));
+    barn.push(g);
+  }
+  if (resten.length) {
+    const g = el("optgroup", { label: ser.length ? "Bare tekst eller ukjent" : "Modeller" });
+    for (const m of resten) g.append(el("option", { value: m.navn, text: merk(m) }));
+    barn.push(g);
+  }
+  modellSelect.replaceChildren(...barn);
+  modellSelect.dataset.syn = JSON.stringify(
+    Object.fromEntries(liste.map((m) => [m.navn, m.syn])));
+  if (innstillinger.modell && liste.some((m) => m.navn === innstillinger.modell)) {
+    modellSelect.value = innstillinger.modell;
+  }
+  modellValgt();
+}
+
+function modellValgt() {
+  const valgt = modellSelect.value;
+  try { chrome.storage.sync.set({ modell: valgt }); } catch (_) {}
+  innstillinger.modell = valgt;
+  let syn = null;
+  try { syn = JSON.parse(modellSelect.dataset.syn || "{}")[valgt]; } catch (_) {}
+  if (valgt && syn === false) {
+    modellNote.textContent = "Denne modellen ser ikke bilder. Den kan bare bruke transkripsjonen.";
+    modellNote.className = "nbvb-note nbvb-advarsel";
+  } else {
+    modellNote.textContent = "";
+    modellNote.className = "nbvb-note";
+  }
 }
 
 function visFeil(tekst) {
@@ -216,6 +278,7 @@ async function start() {
     samtolk: true,
     storyboard: true,
   };
+  if (modellSelect && modellSelect.value) body.modell = modellSelect.value;
   try { chrome.storage.sync.set({ antall, transkriber: transkriberCb.checked, bitSekunder }); } catch (_) {}
 
   startKnapp.disabled = true;

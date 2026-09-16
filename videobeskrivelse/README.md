@@ -134,6 +134,19 @@ Last inn utvidelsen i Chrome:
    bitlengden for lyden og om lyd skal sendes til Whisper. De to siste kan også
    settes rett i panelet.
 
+### Velge modell i panelet
+
+Panelet har en nedtrekksliste over modellene på inferensserveren. Den henter
+lista fra serveren, og deler den i to: modeller som kan se bilder, og resten.
+Velger du en modell uten syn, sier panelet fra om at den bare får
+transkripsjonen å gå på. Valget huskes til neste gang. «Standard» bruker det
+`server.py` er satt opp med, altså `NB_INFERENS_MODELL` eller
+`gemma4:26b-a4b-it-q8_0`.
+
+Hvilke modeller som kan se bilder leses fra Ollamas `/api/show`, der `vision`
+i `capabilities` avgjør. Lista mellomlagres i fem minutter, siden den krever
+ett kall per modell.
+
 ### Ruter på serveren
 
 | Rute | Hva |
@@ -141,6 +154,7 @@ Last inn utvidelsen i Chrome:
 | `GET /helse` | status, hvilken inferens- og Whisper-adresse som brukes, om ffmpeg finnes |
 | `POST /jobb` | start en jobb. Body: `{"kilde": url, "referer": ..., "user_agent": ..., "antall": 8, "transkriber": true, "bit_sekunder": 20, "samtolk": true, "urn": ..., "tittel": ...}` |
 | `GET /jobb/<id>` | status (`kjører`, `ferdig`, `feil`), logg og resultat |
+| `GET /modeller` | modellene inferensserveren tilbyr, hver med om den kan se bilder. `?frisk` hopper over mellomlagringen |
 | `GET /storyboard/<id>` | storyboardet for jobben som ferdig HTML-side |
 | `GET /jobber` | liste over jobber i denne kjøringen |
 

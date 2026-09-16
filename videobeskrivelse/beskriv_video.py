@@ -267,6 +267,26 @@ def tilgjengelige_modeller(url: str, token: str | None) -> list[str]:
     return []
 
 
+def modell_kapabiliteter(url: str, token: str | None, navn: str,
+                         timeout: int = 15) -> list[str] | None:
+    """
+    Hva modellen kan, ifølge Ollamas /api/show, for eksempel
+    ["completion", "vision", "tools"]. None hvis serveren ikke svarer på ruta.
+    """
+    base = url.rstrip("/")
+    req = urllib.request.Request(
+        f"{base}/api/show", data=json.dumps({"model": navn}).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as svar:
+            kap = json.loads(svar.read()).get("capabilities")
+    except (urllib.error.URLError, ValueError, OSError):
+        return None
+    return kap if isinstance(kap, list) else None
+
+
 def _berik_modellfeil(e: Feil, url: str, token: str | None, modell: str) -> Feil:
     """Gjør «model not found» om til en feil som viser hvilke navn som finnes."""
     if "not found" not in str(e).lower():
