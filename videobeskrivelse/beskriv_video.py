@@ -45,7 +45,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -80,6 +82,19 @@ LYDFILTRE = {
 }
 # Hvor mange lydbiter som sendes samtidig.
 SAMTIDIGE_BITER = 3
+# Hvor mange ffmpeg-kall som henter stillbilder samtidig. Mot HLS går tiden
+# mest med til å vente på nettet: 8 bilder fra en film på 9 min tok 14 s ett
+# og ett, 3,3 s med 4 samtidige og 2,1 s med 8 (målt 16.09.2026).
+SAMTIDIGE_BILDER = 6
+# Hvor mange HLS-segmenter som lastes ned samtidig når lyden skal ut. ffmpeg
+# leser segmentene ett og ett: en film på 9 min tok 42 s.
+SAMTIDIGE_SEGMENTER = 8
+
+# NB-Whisper har et musikkfilter (AST-klassifikator) som er på i tjenesten. Målt
+# 16.09.2026: bakgrunnsmusikk 20 dB under talen er nok til at all tale kastes.
+# Vi slår det derfor av som standard. Uten filter gir ren musikk tomt svar eller
+# segmenter som bare er «...», og de lukes bort i transkriber_fil().
+STANDARD_MUSIKKFILTER = False
 
 SYSTEM_PROMPT = (
     "Du er en assistent som beskriver videoer for et bibliotek. Du får en serie "
@@ -164,34 +179,134 @@ def trekk_ut_bilder(kilde: str, antall: int, bredde: int, mappe: Path, varighet:
     if varighet <= 0:
         raise Feil("Videoen har ingen varighet.")
     antall = max(1, min(antall, int(varighet) or 1))
-    bilder: list[tuple[float, Path]] = []
-    for i in range(antall):
+    resultater: list[tuple[float, Path] | None] = [None] * antall
+    ferdige = [0]
+    las = threading.Lock()
+
+    def hent(i: int) -> None:
         t = varighet * (i + 0.5) / antall
         ut = mappe / f"bilde_{i + 1:03d}.jpg"
-        _kjor(["ffmpeg", "-v", "error", "-y", "-ss", f"{t:.3f}",
-               *_inn_args(kilde, referer, user_agent),
-               "-frames:v", "1", "-vf", f"scale={bredde}:-2", "-q:v", "3", str(ut)])
+        try:
+            _kjor(["ffmpeg", "-v", "error", "-y", "-ss", f"{t:.3f}",
+                   *_inn_args(kilde, referer, user_agent),
+                   "-frames:v", "1", "-vf", f"scale={bredde}:-2", "-q:v", "3", str(ut)])
+        except Feil as e:
+            # Ett bilde som ikke lar seg hente, skal ikke velte hele jobben.
+            logg(f"  bilde ved {tidsstempel(t)} feilet: {e}")
+            return
         if ut.exists():
-            bilder.append((t, ut))
-            logg(f"  bilde {i + 1}/{antall} ved {tidsstempel(t)}")
+            resultater[i] = (t, ut)
+            with las:
+                ferdige[0] += 1
+                logg(f"  bilde {ferdige[0]}/{antall} ferdig ({tidsstempel(t)})")
+
+    with ThreadPoolExecutor(max_workers=min(SAMTIDIGE_BILDER, antall)) as pool:
+        list(pool.map(hent, range(antall)))
+    bilder = [b for b in resultater if b]
     if not bilder:
         raise Feil("ffmpeg produserte ingen bilder.")
     return bilder
 
 
+def _hent(url: str, referer: str | None, user_agent: str | None, timeout: int = 60) -> bytes:
+    req = urllib.request.Request(url)
+    if referer:
+        req.add_header("Referer", referer)
+    if user_agent:
+        req.add_header("User-Agent", user_agent)
+    with urllib.request.urlopen(req, timeout=timeout) as svar:
+        return svar.read()
+
+
+def _hls_segmenter(kilde: str, referer: str | None, user_agent: str | None) -> list[str] | None:
+    """
+    Segmentadressene i en HLS-strøm, eller None hvis kilden ikke er en enkel
+    VOD-spilleliste. Er det flere varianter, velges den med lavest bitrate:
+    lyden er den samme, og det blir mindre å laste ned.
+    """
+    if not er_url(kilde) or ".m3u8" not in urllib.parse.urlsplit(kilde).path:
+        return None
+    tekst = _hent(kilde, referer, user_agent).decode("utf-8", "replace")
+    url = kilde
+    if "#EXT-X-STREAM-INF" in tekst:
+        varianter = []
+        linjer = tekst.splitlines()
+        for i, linje in enumerate(linjer):
+            if linje.startswith("#EXT-X-STREAM-INF"):
+                m = re.search(r"BANDWIDTH=(\d+)", linje)
+                neste = next((l.strip() for l in linjer[i + 1:] if l.strip() and not l.startswith("#")), None)
+                if neste:
+                    varianter.append((int(m.group(1)) if m else 0, neste))
+        if not varianter:
+            return None
+        url = urllib.parse.urljoin(kilde, min(varianter)[1])
+        tekst = _hent(url, referer, user_agent).decode("utf-8", "replace")
+    if "#EXT-X-ENDLIST" not in tekst or "#EXT-X-KEY" in tekst:
+        return None  # direktesending eller kryptert: la ffmpeg ta seg av det
+    return [urllib.parse.urljoin(url, l.strip()) for l in tekst.splitlines()
+            if l.strip() and not l.startswith("#")]
+
+
+def _last_ned_hls(kilde: str, ut: Path, referer: str | None, user_agent: str | None,
+                  logg: Logg) -> bool:
+    """Last ned alle segmentene parallelt og skjøt dem til én .ts-fil."""
+    segmenter = _hls_segmenter(kilde, referer, user_agent)
+    if not segmenter:
+        return False
+    # Hvert segment går rett til disk, så en lang film ikke fyller minnet.
+    deler = [ut.with_name(f"{ut.stem}_{i:05d}.ts") for i in range(len(segmenter))]
+
+    def hent(i: int) -> None:
+        for forsok in range(3):
+            try:
+                deler[i].write_bytes(_hent(segmenter[i], referer, user_agent))
+                return
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
+                if forsok == 2:
+                    raise
+
+    try:
+        with ThreadPoolExecutor(max_workers=min(SAMTIDIGE_SEGMENTER, len(segmenter))) as pool:
+            list(pool.map(hent, range(len(segmenter))))
+        with ut.open("wb") as f:
+            for d in deler:
+                with d.open("rb") as inn:
+                    shutil.copyfileobj(inn, f)
+    finally:
+        for d in deler:
+            d.unlink(missing_ok=True)
+    logg(f"  lastet ned {len(segmenter)} segmenter ({ut.stat().st_size // (1024 * 1024)} MB)")
+    return True
+
+
 def trekk_ut_lyd(kilde: str, mappe: Path, referer: str | None = None,
-                 user_agent: str | None = None, lydfilter: str = "ingen") -> Path:
+                 user_agent: str | None = None, lydfilter: str = "ingen",
+                 logg: Logg = _stderr) -> Path:
     """
     Lydsporet som 16 kHz mono AAC (m4a), lite nok til å sendes base64-kodet.
 
     `lydfilter` er en nøkkel i LYDFILTRE, eller en ffmpeg-filterkjede direkte.
+
+    Er kilden en HLS-spilleliste, lastes segmentene ned parallelt først, og
+    lyden trekkes ut av den lokale fila. Går det ikke, leser ffmpeg strømmen
+    selv som før.
     """
     ut = mappe / "lyd.m4a"
     kjede = LYDFILTRE.get(lydfilter, lydfilter) if lydfilter else None
     filterargs = ["-af", kjede] if kjede else []
-    _kjor(["ffmpeg", "-v", "error", "-y", *_inn_args(kilde, referer, user_agent),
-           "-vn", "-ac", "1", "-ar", "16000", *filterargs,
-           "-c:a", "aac", "-b:a", "48k", str(ut)])
+    inn = _inn_args(kilde, referer, user_agent)
+    lokal = mappe / "strom.ts"
+    try:
+        if _last_ned_hls(kilde, lokal, referer, user_agent, logg):
+            inn = ["-i", str(lokal)]
+    except Exception as e:  # noqa: BLE001 - reserveløsningen under tar over
+        logg(f"  parallell nedlasting feilet ({e}), lar ffmpeg lese strømmen")
+    try:
+        _kjor(["ffmpeg", "-v", "error", "-y", *inn,
+               "-vn", "-ac", "1", "-ar", "16000", *filterargs,
+               "-c:a", "aac", "-b:a", "48k", str(ut)])
+    finally:
+        lokal.unlink(missing_ok=True)
     if not ut.exists() or ut.stat().st_size == 0:
         raise Feil("ffmpeg produserte ingen lydfil. Har videoen lydspor?")
     return ut
@@ -427,10 +542,20 @@ def flett_inn_transkripsjon(backend, url, token, modell, visuell: str, transkrip
 # NB-Whisper
 # ---------------------------------------------------------------------------
 
+def _har_ord(tekst: str) -> bool:
+    return any(t.isalnum() for t in tekst)
+
+
 def transkriber_fil(lydfil: Path, whisper_url: str = STANDARD_WHISPER_URL, sprak: str = "no",
-                    timeout: int = 900) -> dict:
-    """Send én lydfil til NB-Whisper. Returnerer {"tekst": str, "segmenter": [...]}."""
-    payload = {"file": base64_fil(lydfil), "language": sprak, "response_format": "json"}
+                    timeout: int = 900, musikkfilter: bool = STANDARD_MUSIKKFILTER) -> dict:
+    """
+    Send én lydfil til NB-Whisper. Returnerer {"tekst": str, "segmenter": [...]}.
+
+    `musikkfilter` styrer tjenestens `music_classifier`. Segmenter uten en eneste
+    bokstav eller et siffer (typisk «... ...» over ren musikk) tas ikke med.
+    """
+    payload = {"file": base64_fil(lydfil), "language": sprak, "response_format": "json",
+               "music_classifier": bool(musikkfilter)}
     data = _post_json(whisper_url, None, payload, timeout)
     segmenter = []
     for seg in data.get("content") or []:
@@ -442,14 +567,18 @@ def transkriber_fil(lydfil: Path, whisper_url: str = STANDARD_WHISPER_URL, sprak
             "taler": seg.get("speaker"),
             "tekst": (seg.get("text") or "").strip(),
         })
+    segmenter = [s for s in segmenter if _har_ord(s["tekst"])]
     tekst = (data.get("text") or "").strip()
+    if not _har_ord(tekst):
+        tekst = ""
     if not tekst and segmenter:
         tekst = " ".join(s["tekst"] for s in segmenter if s["tekst"])
     return {"tekst": tekst, "segmenter": segmenter}
 
 
 def transkriber(biter: list[tuple[float, Path]], whisper_url: str = STANDARD_WHISPER_URL,
-                sprak: str = "no", timeout: int = 900, logg: Logg = _stderr) -> dict:
+                sprak: str = "no", timeout: int = 900, logg: Logg = _stderr,
+                musikkfilter: bool = STANDARD_MUSIKKFILTER) -> dict:
     """
     Transkriber alle lydbitene og sett dem sammen til én transkripsjon med
     tidspunkt regnet fra starten av videoen.
@@ -462,7 +591,7 @@ def transkriber(biter: list[tuple[float, Path]], whisper_url: str = STANDARD_WHI
 
     def jobb(i: int) -> None:
         start, fil = biter[i]
-        r = transkriber_fil(fil, whisper_url, sprak, timeout)
+        r = transkriber_fil(fil, whisper_url, sprak, timeout, musikkfilter)
         segmenter = []
         for s in r["segmenter"]:
             if s["start"] is not None:
@@ -498,6 +627,7 @@ def transkriber(biter: list[tuple[float, Path]], whisper_url: str = STANDARD_WHI
         "tekst": " ".join(s["tekst"] for s in segmenter),
         "segmenter": segmenter,
         "antall_biter": len(biter),
+        "musikkfilter": bool(musikkfilter),
     }
 
 
@@ -538,6 +668,7 @@ def analyser(kilde: str, *, antall: int = 8, bredde: int = 768, url: str = STAND
              whisper_url: str = STANDARD_WHISPER_URL, sprak: str = "no",
              bit_sekunder: int = STANDARD_BIT_SEKUNDER, samtolk: bool = True,
              lydfilter: str = "ingen",
+             musikkfilter: bool = STANDARD_MUSIKKFILTER,
              referer: str | None = None, user_agent: str | None = None,
              mappe: Path | None = None, storyboard: Path | None = None,
              tittel: str | None = None, logg: Logg = _stderr) -> dict:
@@ -577,12 +708,14 @@ def analyser(kilde: str, *, antall: int = 8, bredde: int = 768, url: str = STAND
             try:
                 logg("Trekker ut lydspor ..."
                      + (f" (lydfilter: {lydfilter})" if lydfilter and lydfilter != "ingen" else ""))
-                lydfil = trekk_ut_lyd(kilde, mappe, referer, user_agent, lydfilter)
+                lydfil = trekk_ut_lyd(kilde, mappe, referer, user_agent, lydfilter, logg)
                 biter = del_opp_lyd(lydfil, mappe, bit_sekunder, varighet, logg)
                 kb = sum(f.stat().st_size for _, f in biter) // 1024
                 logg(f"Sender {kb} kB lyd til NB-Whisper i {len(biter)} "
-                     f"{'bit' if len(biter) == 1 else 'biter'} ...")
-                lydresultat["transkripsjon"] = transkriber(biter, whisper_url, sprak, timeout, logg)
+                     f"{'bit' if len(biter) == 1 else 'biter'}, musikkfilter "
+                     f"{'på' if musikkfilter else 'av'} ...")
+                lydresultat["transkripsjon"] = transkriber(biter, whisper_url, sprak, timeout, logg,
+                                                           musikkfilter)
                 logg("Transkripsjon klar")
             except Exception as e:  # noqa: BLE001 - feilen rapporteres i resultatet
                 lydresultat["feil"] = str(e)
@@ -694,6 +827,9 @@ def main() -> None:
                    help="send lydsporet til NB-Whisper og tolk talen sammen med bildene")
     p.add_argument("--bit-sekunder", type=int, default=STANDARD_BIT_SEKUNDER,
                    help=f"lengden på hver lydbit til Whisper, 0 = hele sporet i ett (standard {STANDARD_BIT_SEKUNDER})")
+    p.add_argument("--musikkfilter", action="store_true",
+                   help="la NB-Whisper kaste lyd den mener er musikk (av som standard, "
+                        "fordi filteret også kaster tale med musikk under)")
     p.add_argument("--ikke-samtolk", action="store_true",
                    help="beskriv bildene først og flett inn talen til slutt, i stedet for å tolke dem sammen")
     p.add_argument("--whisper-url", default=os.environ.get("NB_WHISPER_URL", STANDARD_WHISPER_URL),
@@ -727,7 +863,8 @@ def main() -> None:
             a.video, antall=a.antall, bredde=a.bredde, url=a.url, token=a.token,
             modell=a.modell, backend=a.backend, per_kall=a.per_kall, timeout=a.timeout,
             transkriber_lyd=a.transkriber, whisper_url=a.whisper_url, sprak=a.sprak,
-            bit_sekunder=a.bit_sekunder, samtolk=not a.ikke_samtolk, lydfilter=a.lydfilter,
+            bit_sekunder=a.bit_sekunder, samtolk=not a.ikke_samtolk,
+            lydfilter=a.lydfilter, musikkfilter=a.musikkfilter,
             referer=a.referer, user_agent=a.user_agent, mappe=a.behold_bilder,
             storyboard=a.storyboard, tittel=a.tittel,
         )

@@ -8,7 +8,7 @@
 # slutt skrives hvilken git-versjon som kjører og hvilken modell den bruker,
 # slik at det ikke er tvil om hva som står bak porten.
 #
-#   ./start.sh                 stopp gammel, start ny på port 8765
+#   ./start.sh                 stopp gammel, start ny på port 8170
 #   ./start.sh --pull          hent siste kode fra git først
 #   ./start.sh --stopp         bare stopp
 #   ./start.sh --port 8800     annen port
@@ -19,7 +19,7 @@ set -uo pipefail
 MAPPE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$MAPPE" || exit 1
 
-PORT=8765
+PORT=8170
 PULL=0
 BARE_STOPP=0
 FORGRUNN=0

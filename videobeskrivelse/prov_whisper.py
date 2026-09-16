@@ -3,9 +3,10 @@
 Finn ut hva som gir mest tale ut av NB-Whisper.
 
 NB-Whisper fjerner musikk automatisk, og på opptak med musikk under talen
-forsvinner ofte hele transkripsjonen. Det finnes ingen dokumentert bryter for
-å skru det av. Dette skriptet prøver seg fram i stedet, og måler hvor mange
-ord hver variant gir:
+forsvinner ofte hele transkripsjonen. Filteret kan slås av med
+`music_classifier: false`, og beskriv_video.py gjør det som standard. Dette
+skriptet sammenligner det med andre grep, og måler hvor mange ord hver
+variant gir:
 
   1. Lydbehandling  — rå lyd mot filtre som løfter fram taleområdet.
   2. Bitlengde      — hele sporet mot korte biter.
@@ -36,9 +37,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import beskriv_video as bv  # noqa: E402
 
-# Felt som kanskje finnes i API-et. Ingen av dem er dokumentert. Vi sender dem
-# én om gangen og ser om svaret endrer seg, eller om serveren avviser feltet.
+# Felt å prøve i forespørselen, ett om gangen. De to første virker: tjenesten
+# gjentar dem i metadata.parameters, og music_classifier=False slipper gjennom
+# tale med musikk under (målt 16.09.2026). Resten er gjetninger som kan
+# avvises eller ignoreres.
 PARAMETRE: list[dict] = [
+    {"music_classifier": False},
+    {"speech_bias": 3},
     {"filter_music": False},
     {"music_filter": False},
     {"remove_music": False},

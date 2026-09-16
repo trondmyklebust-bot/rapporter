@@ -8,8 +8,8 @@ stillbilder og lydspor fra strømmen, bildene går til gemma4 på NB-inferens og
 lyden til NB-Whisper parallelt, og en sluttbeskrivelse flettes sammen.
 
 Kun standardbiblioteket. Start med:
-    python3 server.py                 # lytter på http://127.0.0.1:8765
-    NB_INFERENS_TOKEN=xxx python3 server.py --port 8765
+    python3 server.py                 # lytter på http://127.0.0.1:8170
+    NB_INFERENS_TOKEN=xxx python3 server.py --port 8170
 
 Ruter:
     GET  /helse            → {"ok": true, ...}
@@ -24,7 +24,9 @@ Ruter:
 from __future__ import annotations
 
 import argparse
+import html
 import json
+import re
 import os
 import subprocess
 import sys
@@ -50,6 +52,87 @@ STORYBOARD_MAPPE = Path(__file__).resolve().parent / "storyboards"
 MODELL_CACHE: dict = {"tid": 0.0, "modeller": []}
 MODELL_CACHE_SEKUNDER = 300
 MODELL_LAS = threading.Lock()
+
+
+STARTSIDE_CSS = """
+:root { --blaa: #1F4E79; --lys: #EBF3FB; --graa: #6c757d; --kant: #dde3ef;
+        --bg: #f7f9fc; --kort: #fff; --tekst: #1a1a1a; --ok: #1a7a45; --feil: #b3261e; }
+@media (prefers-color-scheme: dark) {
+  :root { --blaa: #7bb3e3; --lys: #1a2733; --graa: #97a1ad; --kant: #2c333c;
+          --bg: #14181d; --kort: #1c2128; --tekst: #e6e9ee; --ok: #6fcf97; --feil: #f28b82; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+       background: var(--bg); color: var(--tekst);
+       font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+main { flex: 1 0 auto; width: 100%; max-width: 900px; margin: 0 auto; padding: 32px 16px 48px; }
+footer { margin-top: auto; border-top: 1px solid var(--kant); color: var(--graa);
+         font-size: .85rem; padding: 14px 16px; text-align: center; }
+h1 { margin: 0 0 6px; font-size: 1.9rem; color: var(--blaa); }
+h2 { font-size: 1.05rem; color: var(--blaa); margin: 32px 0 10px; font-weight: 600; }
+p.meta { color: var(--graa); margin: 0; font-size: .9rem; }
+.status { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px;
+          background: var(--kort); border: 1px solid var(--kant); border-radius: 10px;
+          padding: 14px 18px; font-size: .92rem; overflow-wrap: anywhere; }
+.status dt { color: var(--graa); }
+.status dd { margin: 0; }
+.ok { color: var(--ok); } .nei { color: var(--feil); }
+ol { padding-left: 1.3em; } code { font-size: .9em; }
+table { width: 100%; border-collapse: collapse; background: var(--kort);
+        border: 1px solid var(--kant); border-radius: 10px; overflow: hidden; }
+td { padding: 8px 12px; border-top: 1px solid var(--kant); }
+tr:first-child td { border-top: 0; }
+td.t { color: var(--graa); white-space: nowrap; width: 1%; font-variant-numeric: tabular-nums; }
+a { color: var(--blaa); }
+"""
+
+
+def lagrede_storyboards() -> list[dict]:
+    """Storyboardene i mappa, nyeste først, med tittelen fra <title>."""
+    liste = []
+    for fil in STORYBOARD_MAPPE.glob("*.html"):
+        with fil.open(encoding="utf-8", errors="replace") as f:
+            m = re.search(r"<title>(.*?)</title>", f.read(4000), re.S)
+        liste.append({"id": fil.stem, "tittel": html.unescape(m.group(1).strip()) if m else fil.stem,
+                      "tid": fil.stat().st_mtime})
+    return sorted(liste, key=lambda s: -s["tid"])
+
+
+def startside() -> str:
+    e = html.escape
+    ffmpeg = bool(__import__("shutil").which("ffmpeg"))
+    rader = "".join(
+        f'<tr><td class="t">{time.strftime("%d.%m.%Y %H:%M", time.localtime(s["tid"]))}</td>'
+        f'<td><a href="/storyboard/{e(s["id"])}" target="_blank" rel="noopener">{e(s["tittel"])}</a></td></tr>'
+        for s in lagrede_storyboards())
+    return f"""<!DOCTYPE html>
+<html lang="no"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Videobeskrivelse</title><style>{STARTSIDE_CSS}</style></head>
+<body><main>
+<h1>Videobeskrivelse</h1>
+<p class="meta">Video på nb.no beskrevet med en modell på NBs inferensserver, og talen transkribert med NB-Whisper.</p>
+<h2>Status</h2>
+<dl class="status">
+  <dt>Versjon</dt><dd>{e(versjon())}</dd>
+  <dt>Modell</dt><dd>{e(INNSTILLINGER["modell"] or bv.STANDARD_MODELL)}</dd>
+  <dt>Inferens</dt><dd>{e(INNSTILLINGER["url"])}</dd>
+  <dt>Whisper</dt><dd>{e(INNSTILLINGER["whisper_url"])}</dd>
+  <dt>Musikkfilter</dt><dd>{"på" if bv.STANDARD_MUSIKKFILTER else "av"} som standard</dd>
+  <dt>ffmpeg</dt><dd class="{'ok' if ffmpeg else 'nei'}">{"funnet" if ffmpeg else "mangler i PATH"}</dd>
+</dl>
+<h2>Slik bruker du den</h2>
+<ol>
+  <li>Last inn utvidelsen <code>chrome-utvidelse/</code> i <code>chrome://extensions</code>
+      (eller <code>nb-videobeskrivelse</code> fra nb-verktoy).</li>
+  <li>Åpne en film på nb.no og trykk play.</li>
+  <li>Velg «Videobeskrivelse» i NB-verktøydokken nede til høyre.</li>
+</ol>
+<h2>Storyboards</h2>
+{f"<table>{rader}</table>" if rader else '<p class="meta">Ingen storyboards ennå.</p>'}
+</main>
+<footer>NB videobeskrivelse · <a href="/helse">/helse</a> · <a href="/jobber">/jobber</a></footer>
+</body></html>"""
 
 
 def versjon() -> str:
@@ -147,6 +230,7 @@ def _ny_jobb(kilde: str, param: dict) -> str:
                 bit_sekunder=int(param.get("bit_sekunder", bv.STANDARD_BIT_SEKUNDER)),
                 samtolk=bool(param.get("samtolk", True)),
                 lydfilter=param.get("lydfilter") or "ingen",
+                musikkfilter=bool(param.get("musikkfilter", bv.STANDARD_MUSIKKFILTER)),
                 referer=param.get("referer"),
                 user_agent=param.get("user_agent"),
                 storyboard=(STORYBOARD_MAPPE / f"{jobb_id}.html"
@@ -213,7 +297,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         sti = self.path.split("?", 1)[0].rstrip("/")
-        if sti in ("", "/helse"):
+        if sti == "":
+            kropp = startside().encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(kropp)))
+            self.end_headers()
+            self.wfile.write(kropp)
+        elif sti == "/helse":
             self._json(200, {
                 "ok": True,
                 "versjon": versjon(),
@@ -290,7 +381,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     p = argparse.ArgumentParser(description="Lokal server for NB videobeskrivelse.")
     p.add_argument("--vert", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=int, default=8170)
     a = p.parse_args()
     try:
         bv.sjekk_verktoy()

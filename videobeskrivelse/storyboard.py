@@ -214,11 +214,15 @@ def bygg(resultat: dict, bildefiler: list[tuple[float, Path]], *, tittel: str | 
                      f'<td class="s">{taler}</td>'
                      f'<td>{html.escape(s["tekst"])}</td></tr>')
         d.append("</table>")
-        biter = (resultat.get("transkripsjon") or {}).get("antall_biter")
+        t = resultat.get("transkripsjon") or {}
+        biter = t.get("antall_biter")
         if biter and biter > 1:
             d.append(f'<p class="meta">Lyden ble sendt til NB-Whisper i {biter} biter. '
                      "Talernavn tildeles per bit, så samme navn i to biter er ikke "
                      "nødvendigvis samme person.</p>")
+        if "musikkfilter" in t:
+            d.append('<p class="meta">Musikkfilteret i NB-Whisper var '
+                     f'{"på" if t["musikkfilter"] else "av"}.</p>')
         d.append("</section>")
     elif resultat.get("transkripsjon_feil"):
         d.append('<section><h2>Transkripsjon</h2>'

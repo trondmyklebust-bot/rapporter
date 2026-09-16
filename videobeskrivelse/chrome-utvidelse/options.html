@@ -15,14 +15,16 @@
 <body>
   <h2 style="margin:0 0 6px;color:#1F4E79">NB videobeskrivelse</h2>
   <label for="serverUrl">Lokal server</label>
-  <input type="text" id="serverUrl" placeholder="http://127.0.0.1:8765">
+  <input type="text" id="serverUrl" placeholder="http://127.0.0.1:8170">
   <p class="hint">Der <code>server.py</code> kjører. Inferens-URL, token og Whisper-URL settes som miljøvariabler når serveren startes.</p>
   <label for="antall">Antall stillbilder</label>
   <input type="number" id="antall" min="1" max="60">
   <label><input type="checkbox" id="transkriber"> Send lyd til NB-Whisper</label>
   <label for="bitSekunder">Sekunder per lydbit</label>
   <input type="number" id="bitSekunder" min="0" max="600">
-  <p class="hint">Whisper filtrerer bort musikk. Korte biter gir tale i en pause i musikken en sjanse til å slippe gjennom. 0 sender hele lydsporet i én forespørsel.</p>
+  <p class="hint">Hver bit transkriberes for seg, flere samtidig. 0 sender hele lydsporet i én forespørsel, og da holder talernavnene seg likt gjennom hele opptaket.</p>
+  <label><input type="checkbox" id="musikkfilter"> Musikkfilter i Whisper</label>
+  <p class="hint">Filteret kaster lyd det mener er musikk, og tar med seg tale som har musikk under, selv svak bakgrunnsmusikk. La det være av med mindre du får mye rot fra sangtekster.</p>
   <button id="lagre">Lagre</button><span id="status"></span>
   <script src="options.js"></script>
 </body>

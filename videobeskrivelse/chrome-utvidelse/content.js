@@ -1,13 +1,19 @@
-// Legger en knapp og et panel på nb.no-sider med video. Ved klikk hentes
-// strømadressen fra bakgrunnsskriptet og sendes til den lokale serveren
-// (server.py), som henter bilder og lyd, beskriver med gemma4 og
-// transkriberer med NB-Whisper. Panelet poller status og viser resultatet.
+// Melder seg inn i NB-verktøydokken (nb-verktoy.js) som en rad på
+// videoobjekter. Ved klikk hentes strømadressen fra bakgrunnsskriptet og
+// sendes til den lokale serveren (server.py), som henter bilder og lyd,
+// beskriver med gemma4 og transkriberer med NB-Whisper. Panelet poller status
+// og viser resultatet.
 
-const STANDARD_SERVER = "http://127.0.0.1:8765";
+const ID = "videobeskrivelse";
+const STANDARD_SERVER = "http://127.0.0.1:8170";
+// Porten var 8765 fram til 16.09.2026, men den brukes av OCR-maskin.
+const GAMLE_SERVERE = new Set(["http://127.0.0.1:8765", "http://localhost:8765"]);
+// Mediatyper i api.nb.no som har en videostrøm.
+const VIDEO = new Set(["film", "fjernsyn", "video"]);
 const POLL_MS = 2000;
 
 let serverUrl = STANDARD_SERVER;
-let innstillinger = { antall: 8, transkriber: true, bitSekunder: 20, modell: "" };
+let innstillinger = { antall: 8, transkriber: true, bitSekunder: 20, musikkfilter: false, modell: "" };
 let aktivJobb = null;
 let pollTimer = null;
 
@@ -44,9 +50,9 @@ function tittelFraSide() {
 
 async function hentInnstillinger() {
   try {
-    const l = await chrome.storage.sync.get({ serverUrl: STANDARD_SERVER, antall: 8, transkriber: true, bitSekunder: 20, modell: "" });
-    serverUrl = l.serverUrl || STANDARD_SERVER;
-    innstillinger = { antall: l.antall, transkriber: l.transkriber, bitSekunder: l.bitSekunder, modell: l.modell };
+    const l = await chrome.storage.sync.get({ serverUrl: STANDARD_SERVER, antall: 8, transkriber: true, bitSekunder: 20, musikkfilter: false, modell: "" });
+    serverUrl = l.serverUrl && !GAMLE_SERVERE.has(l.serverUrl) ? l.serverUrl : STANDARD_SERVER;
+    innstillinger = { antall: l.antall, transkriber: l.transkriber, bitSekunder: l.bitSekunder, musikkfilter: l.musikkfilter, modell: l.modell };
   } catch (_) { /* bruk standard */ }
 }
 
@@ -74,7 +80,7 @@ function stromFraVideoElement() {
 
 // ---------- panel ----------
 
-let panel, statusEl, feilEl, resultatEl, loggEl, startKnapp, antallInput, transkriberCb, bitInput, modellSelect, modellNote;
+let panel, statusEl, feilEl, resultatEl, loggEl, startKnapp, antallInput, transkriberCb, musikkCb, bitInput, modellSelect, modellNote;
 
 function byggPanel() {
   if (panel) return;
@@ -86,6 +92,8 @@ function byggPanel() {
   antallInput = el("input", { type: "number", min: "1", max: "60", value: String(innstillinger.antall) });
   transkriberCb = el("input", { type: "checkbox" });
   transkriberCb.checked = !!innstillinger.transkriber;
+  musikkCb = el("input", { type: "checkbox" });
+  musikkCb.checked = !!innstillinger.musikkfilter;
   startKnapp = el("button", { text: "Beskriv denne videoen", onclick: start });
   bitInput = el("input", { type: "number", min: "0", max: "600", value: String(innstillinger.bitSekunder),
                            title: "Sekunder per lydbit til Whisper. 0 sender hele lydsporet i én forespørsel." });
@@ -93,7 +101,9 @@ function byggPanel() {
     startKnapp,
     el("label", {}, el("span", { text: "Bilder" }), antallInput),
     el("label", {}, transkriberCb, el("span", { text: "Whisper" })),
-    el("label", { title: "Sekunder per lydbit. 0 = hele lydsporet i ett." }, el("span", { text: "Bit s" }), bitInput)
+    el("label", { title: "Sekunder per lydbit. 0 = hele lydsporet i ett." }, el("span", { text: "Bit s" }), bitInput),
+    el("label", { title: "Whisper kaster lyd den mener er musikk, også tale med musikk under. Av gir mest tale." },
+      musikkCb, el("span", { text: "Musikkfilter" }))
   );
   modellSelect = el("select", { class: "nbvb-modell", onchange: modellValgt },
     el("option", { value: "", text: "Henter modeller …" }));
@@ -286,13 +296,15 @@ async function start() {
     antall,
     transkriber: transkriberCb.checked,
     bit_sekunder: bitSekunder,
+    musikkfilter: musikkCb.checked,
     samtolk: true,
     storyboard: true,
   };
   if (modellSelect && modellSelect.value) body.modell = modellSelect.value;
-  try { chrome.storage.sync.set({ antall, transkriber: transkriberCb.checked, bitSekunder }); } catch (_) {}
+  try { chrome.storage.sync.set({ antall, transkriber: transkriberCb.checked, bitSekunder, musikkfilter: musikkCb.checked }); } catch (_) {}
 
   startKnapp.disabled = true;
+  NBVerktoy.jobber(ID, true);
   settStatus(`Sender ${strom.type === "master" ? "HLS-spillelista" : "strømmen"} til serveren …\n${strom.url}`);
   let svar;
   try {
@@ -304,6 +316,7 @@ async function start() {
   } catch (e) {
     visFeil("Klarte ikke starte jobben: " + e.message);
     startKnapp.disabled = false;
+    NBVerktoy.jobber(ID, false);
     return;
   }
   aktivJobb = svar.id;
@@ -330,22 +343,66 @@ async function poll() {
   }
   startKnapp.disabled = false;
   aktivJobb = null;
+  NBVerktoy.jobber(ID, false);
   if (jobb.status === "feil") {
     settStatus("Feilet.");
     visFeil(jobb.feil || "Ukjent feil");
+    NBVerktoy.varsle("Videobeskrivelsen feilet.", true);
   } else {
     settStatus("Ferdig.");
     visResultat(jobb);
+    NBVerktoy.varsle("Videobeskrivelsen er klar.");
   }
 }
 
-// ---------- oppstart ----------
+// ---------- registrering i dokken ----------
 
-(async function init() {
-  await hentInnstillinger();
-  const knapp = el("button", { id: "nbvb-knapp", text: "Beskriv video", onclick: () => {
+// nb.no bruker sesam-id i /items/-adressene, så mediatypen må slås opp i
+// api.nb.no. Raden er borte til svaret sier at objektet er video.
+let funnet = { itemId: null, erVideo: false };
+
+const verktoy = {
+  id: ID,
+  navn: "Videobeskrivelse",
+  hint: "Beskriv videoen med gemma4 og NB-Whisper",
+  farge: "#1f4e79",
+  nivaa: "objekt",
+  rang: 95,
+  gjelder: (ktx) => ktx.type === "objekt" && ktx.itemId === funnet.itemId && funnet.erVideo,
+  paaObjekt: async () => {
+    await hentInnstillinger();
     byggPanel();
-    panel.hidden = !panel.hidden;
-  }});
-  document.documentElement.append(knapp);
-})();
+    panel.hidden = false;
+  },
+};
+
+async function sjekk() {
+  const ktx = NBVerktoy.kontekst();
+  const id = ktx.type === "objekt" ? ktx.itemId : "";
+  if (id === funnet.itemId) return;
+
+  funnet = { itemId: id, erVideo: false };
+  if (panel && !aktivJobb) panel.hidden = true;
+  NBVerktoy.registrer(verktoy);
+  if (!id) return;
+
+  try {
+    const r = await fetch(`https://api.nb.no/catalog/v1/items/${encodeURIComponent(id)}`,
+                          { credentials: "omit" });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (NBVerktoy.kontekst().itemId !== id) return;   // brukeren har navigert videre
+    const typer = d.metadata?.mediaTypes || [d.metadata?.mediaType];
+    funnet.erVideo = typer.some((t) => VIDEO.has(String(t).toLowerCase()));
+    NBVerktoy.registrer(verktoy);
+  } catch (_) {
+    /* stille: utvidelsen skal aldri komme i veien for Nettbiblioteket */
+  }
+}
+
+hentInnstillinger();
+NBVerktoy.registrer(verktoy);
+window.addEventListener("nbv:navigasjon", sjekk);
+window.addEventListener("popstate", sjekk);
+new MutationObserver(sjekk).observe(document.documentElement, { childList: true, subtree: true });
+sjekk();
