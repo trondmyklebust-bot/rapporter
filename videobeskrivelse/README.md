@@ -6,7 +6,7 @@ input, bare tekst og bilder. Verktøyene her løser det slik:
 1. ffmpeg trekker ut stillbilder jevnt fordelt over videoen.
 2. Samtidig trekker ffmpeg ut lydsporet, deler det i biter og sender bitene til
    NB-Whisper.
-3. Modellen (`gemma4:26b` som standard) får bildene og talen fra samme tidsrom i
+3. Modellen (`gemma4:26b-a4b-it-q8_0` som standard) får bildene og talen fra samme tidsrom i
    ett og samme kall, og tolker dem i sammenheng.
 4. Er videoen delt i flere deler, syr et siste kall delbeskrivelsene sammen til
    én beskrivelse på norsk.
@@ -16,6 +16,7 @@ Tre deler:
 | Fil | Hva |
 |-----|-----|
 | `beskriv_video.py` | Kommandolinjeverktøy og kjernen (`analyser()`), kun standardbiblioteket |
+| `storyboard.py` | Bygger storyboardet som én selvstendig HTML-fil |
 | `server.py` | Lokal HTTP-server som Chrome-utvidelsen snakker med, kun standardbiblioteket |
 | `chrome-utvidelse/` | Chrome-utvidelse som legger en «Beskriv video»-knapp på nb.no-sider |
 
@@ -47,6 +48,7 @@ export NB_INFERENS_TOKEN=xxx          # hvis gatewayen krever token
 python3 beskriv_video.py film.mp4                                   # NB-inferens, gemma4
 python3 beskriv_video.py film.mp4 --transkriber --ut resultat.json  # også lyd via NB-Whisper
 python3 beskriv_video.py film.mp4 --transkriber --bit-sekunder 10   # kortere lydbiter
+python3 beskriv_video.py film.mp4 --transkriber --storyboard film.html
 python3 beskriv_video.py "https://.../playlist.m3u8" --referer https://www.nb.no/items/...
 python3 beskriv_video.py film.mp4 --url http://localhost:1234       # LM Studio, første modell
 python3 beskriv_video.py film.mp4 --url http://localhost:1234 --modell qwen/qwen3-vl-8b
@@ -71,10 +73,21 @@ strømmen krever det.
 | `--modeller` | list modellene serveren tilbyr, og avslutt |
 | `--url http://localhost:11434` | annen server, for eksempel lokal Ollama eller LM Studio |
 | `--backend ollama` / `openai` | overstyr automatisk valg av rute |
+| `--storyboard film.html` | lag et storyboard: bilder, beskrivelser og replikker i én HTML-fil |
+| `--tittel "..."` | overskrift på storyboardet |
 | `--ut resultat.json` | lagre alt som JSON: bilder med tidspunkt, delbeskrivelser, transkripsjon, sluttbeskrivelse |
 | `--behold-bilder MAPPE` | behold stillbildene og lydfila for kontroll |
 
 Beskrivelsen skrives til stdout, framdrift til stderr.
+
+### Storyboard
+
+`--storyboard fil.html` lager en side som presenterer filmen: bildene i
+rekkefølge med tidspunkt, replikken som hører til hvert bilde, beskrivelsen av
+hver del, sammendraget øverst og hele transkripsjonen nederst. Bildene ligger
+base64-kodet i sida, så fila kan sendes videre, arkiveres og skrives ut som den
+er. Hver replikk vises ved det bildet den ligger nærmest, målt fra midten av
+replikken, så ingenting dukker opp to ganger.
 
 Backend velges automatisk: svarer serveren på `/api/version` er det Ollama
 (`/api/chat` med `think: false`), ellers brukes OpenAI-ruten
@@ -97,7 +110,8 @@ Utvidelsen legger en knapp nederst til høyre på `https://www.nb.no/items/...`
 3. Serveren kjører `analyser()`: bilder og lyd hentes parallelt, lyden går til
    NB-Whisper i biter, og modellen tolker bilder og tale sammen.
 4. Panelet viser framdrift, beskrivelsen, transkripsjonen med taler og
-   tidspunkt, og kan kopiere teksten eller laste ned alt som JSON.
+   tidspunkt. Knappen «Åpne storyboard» åpner presentasjonen i en ny fane, og
+   du kan kopiere teksten eller laste ned alt som JSON.
 
 ### Oppsett
 
@@ -127,6 +141,7 @@ Last inn utvidelsen i Chrome:
 | `GET /helse` | status, hvilken inferens- og Whisper-adresse som brukes, om ffmpeg finnes |
 | `POST /jobb` | start en jobb. Body: `{"kilde": url, "referer": ..., "user_agent": ..., "antall": 8, "transkriber": true, "bit_sekunder": 20, "samtolk": true, "urn": ..., "tittel": ...}` |
 | `GET /jobb/<id>` | status (`kjører`, `ferdig`, `feil`), logg og resultat |
+| `GET /storyboard/<id>` | storyboardet for jobben som ferdig HTML-side |
 | `GET /jobber` | liste over jobber i denne kjøringen |
 
 Serveren svarer med `Access-Control-Allow-Origin: *` slik at utvidelsen
@@ -146,7 +161,7 @@ Serveren svarer med `Access-Control-Allow-Origin: *` slik at utvidelsen
   Kortere biter demper problemet, men fjerner det ikke. Vil du ha med tale som
   ligger oppå musikk hele veien, må vokalen skilles ut først, for eksempel med
   Demucs, før lyden sendes.
-- **Standardmodellen er `gemma4:26b`.** Heter modellen noe annet på serveren din,
+- **Standardmodellen er `gemma4:26b-a4b-it-q8_0`.** Heter modellen noe annet på serveren din,
   se lista med `python3 beskriv_video.py --modeller`, og sett riktig navn med
   `--modell` eller miljøvariabelen `NB_INFERENS_MODELL`. Treffer du et navn som
   ikke finnes, viser feilmeldingen hvilke som gjør det.

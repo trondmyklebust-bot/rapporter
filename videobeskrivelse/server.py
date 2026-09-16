@@ -16,6 +16,7 @@ Ruter:
     POST /jobb             → {"id": "..."}   body: {"kilde": url, "referer": ..., "antall": 8,
                                                    "transkriber": true, "bit_sekunder": 20, ...}
     GET  /jobb/<id>        → {"status": "kjører"|"ferdig"|"feil", "logg": [...], "resultat": {...}}
+    GET  /storyboard/<id>  → storyboardet for jobben som ferdig HTML-side
     GET  /jobber           → liste over jobber
 """
 
@@ -38,10 +39,13 @@ JOBBER: dict[str, dict] = {}
 LAS = threading.Lock()
 MAKS_JOBBER = 50
 
+# Storyboardene legges her og hentes via /storyboard/<id>.
+STORYBOARD_MAPPE = Path(__file__).resolve().parent / "storyboards"
+
 INNSTILLINGER = {
     "url": os.environ.get("NB_INFERENS_URL", bv.STANDARD_URL),
     "token": os.environ.get("NB_INFERENS_TOKEN"),
-    "modell": os.environ.get("NB_INFERENS_MODELL"),  # None → gemma4:26b på Ollama
+    "modell": os.environ.get("NB_INFERENS_MODELL"),  # None → gemma4:26b-a4b-it-q8_0 på Ollama
     "whisper_url": os.environ.get("NB_WHISPER_URL", bv.STANDARD_WHISPER_URL),
 }
 
@@ -58,6 +62,7 @@ def _ny_jobb(kilde: str, param: dict) -> str:
         "logg": [],
         "resultat": None,
         "feil": None,
+        "storyboard": False,
     }
     with LAS:
         JOBBER[jobb_id] = jobb
@@ -90,10 +95,14 @@ def _ny_jobb(kilde: str, param: dict) -> str:
                 samtolk=bool(param.get("samtolk", True)),
                 referer=param.get("referer"),
                 user_agent=param.get("user_agent"),
+                storyboard=(STORYBOARD_MAPPE / f"{jobb_id}.html"
+                            if param.get("storyboard", True) else None),
+                tittel=param.get("tittel"),
                 logg=logg,
             )
             with LAS:
                 jobb["resultat"] = resultat
+                jobb["storyboard"] = bool(resultat.get("storyboard"))
                 jobb["status"] = "ferdig"
             logg("Ferdig")
         except Exception as e:  # noqa: BLE001 - alt skal tilbake til utvidelsen
@@ -159,9 +168,24 @@ class Handler(BaseHTTPRequestHandler):
                 "bit_sekunder": bv.STANDARD_BIT_SEKUNDER,
                 "ffmpeg": bool(__import__("shutil").which("ffmpeg")),
             })
+        elif sti.startswith("/storyboard/"):
+            jobb_id = sti[len("/storyboard/"):]
+            fil = STORYBOARD_MAPPE / f"{jobb_id}.html"
+            # Ingen stier utenfor mappa, uansett hva som står i URL-en.
+            if "/" in jobb_id or ".." in jobb_id or not fil.is_file():
+                self._json(404, {"feil": "fant ikke storyboardet"})
+                return
+            kropp = fil.read_bytes()
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(kropp)))
+            self.end_headers()
+            self.wfile.write(kropp)
         elif sti == "/jobber":
             with LAS:
-                liste = [{k: j[k] for k in ("id", "kilde", "urn", "tittel", "status", "startet")}
+                liste = [{k: j[k] for k in ("id", "kilde", "urn", "tittel", "status",
+                                            "startet", "storyboard")}
                          for j in sorted(JOBBER.values(), key=lambda j: -j["startet"])]
             self._json(200, liste)
         elif sti.startswith("/jobb/"):

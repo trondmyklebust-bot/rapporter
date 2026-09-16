@@ -38,3 +38,5 @@
 #nbvb-panel .nbvb-seg .s { color: #1F4E79; font-weight: 600; min-width: 60px; }
 #nbvb-panel .nbvb-logg { font-size: 12px; color: #6c757d; max-height: 120px; overflow: auto; margin-top: 8px; border-top: 1px dashed #dde3ef; padding-top: 6px; }
 #nbvb-panel .nbvb-kopier { margin-left: auto; }
+#nbvb-panel .nbvb-primaer { background: #1a7a45; }
+#nbvb-panel .nbvb-primaer:hover { background: #22a05b; }

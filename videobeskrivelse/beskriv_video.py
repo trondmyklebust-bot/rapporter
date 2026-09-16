@@ -25,6 +25,7 @@ Eksempler:
     python3 beskriv_video.py film.mp4
     python3 beskriv_video.py film.mp4 --antall 12 --transkriber --ut beskrivelse.json
     python3 beskriv_video.py film.mp4 --transkriber --bit-sekunder 10
+    python3 beskriv_video.py film.mp4 --transkriber --storyboard film.html
     python3 beskriv_video.py "https://.../playlist.m3u8" --referer https://www.nb.no/items/...
     NB_INFERENS_TOKEN=xxx python3 beskriv_video.py film.mp4 --modell gemma4:e4b  # mindre og raskere
     python3 beskriv_video.py film.mp4 --url http://localhost:11434   # lokal Ollama
@@ -50,8 +51,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import storyboard as sb  # noqa: E402
+
 STANDARD_URL = "https://api.inference.nb.no"
-STANDARD_MODELL = "gemma4:26b"
+STANDARD_MODELL = "gemma4:26b-a4b-it-q8_0"
 STANDARD_WHISPER_URL = (
     "https://nb-whisper-large-predictor.inference.nb.no/v1/models/nb-whisper-large:predict"
 )
@@ -495,7 +499,8 @@ def analyser(kilde: str, *, antall: int = 8, bredde: int = 768, url: str = STAND
              whisper_url: str = STANDARD_WHISPER_URL, sprak: str = "no",
              bit_sekunder: int = STANDARD_BIT_SEKUNDER, samtolk: bool = True,
              referer: str | None = None, user_agent: str | None = None,
-             mappe: Path | None = None, logg: Logg = _stderr) -> dict:
+             mappe: Path | None = None, storyboard: Path | None = None,
+             tittel: str | None = None, logg: Logg = _stderr) -> dict:
     """
     Kjør hele løpet: lyd → Whisper i biter, bilder → modell, og til slutt én
     beskrivelse. Med samtolk=True får modellen bildene og talen fra samme
@@ -518,6 +523,8 @@ def analyser(kilde: str, *, antall: int = 8, bredde: int = 768, url: str = STAND
 
     resultat: dict = {"kilde": kilde, "modell": modell, "backend": backend, "url": url,
                       "samtolk": bool(transkriber_lyd and samtolk)}
+    if tittel:
+        resultat["tittel"] = tittel
     try:
         varighet = varighet_sekunder(kilde, referer, user_agent)
         resultat["varighet_sekunder"] = round(varighet, 3)
@@ -608,6 +615,13 @@ def analyser(kilde: str, *, antall: int = 8, bredde: int = 768, url: str = STAND
                 resultat["transkripsjon_feil"] = lydresultat.get("feil", "ukjent feil")
 
         resultat["beskrivelse"] = beskrivelse
+
+        # Storyboardet må lages mens bildefilene fortsatt finnes.
+        if storyboard is not None:
+            sti = sb.skriv(storyboard, resultat, bilder, tittel=tittel, per_kall=max(1, per_kall))
+            resultat["storyboard"] = str(sti)
+            logg(f"Skrev storyboard: {sti}")
+
         return resultat
     finally:
         if tmp:
@@ -647,6 +661,9 @@ def main() -> None:
     p.add_argument("--referer", help="Referer-hode ffmpeg sender når kilden er en URL")
     p.add_argument("--user-agent", help="User-Agent-hode ffmpeg sender når kilden er en URL")
     p.add_argument("--ut", type=Path, help="skriv resultat som JSON til denne fila")
+    p.add_argument("--storyboard", type=Path, metavar="FIL.html",
+                   help="lag et storyboard: én HTML-fil med bilder, beskrivelser og replikker")
+    p.add_argument("--tittel", help="tittel på storyboardet")
     p.add_argument("--behold-bilder", type=Path, metavar="MAPPE",
                    help="lagre stillbildene (og lydfila) i denne mappa i stedet for å slette dem")
     a = p.parse_args()
@@ -669,6 +686,7 @@ def main() -> None:
             transkriber_lyd=a.transkriber, whisper_url=a.whisper_url, sprak=a.sprak,
             bit_sekunder=a.bit_sekunder, samtolk=not a.ikke_samtolk,
             referer=a.referer, user_agent=a.user_agent, mappe=a.behold_bilder,
+            storyboard=a.storyboard, tittel=a.tittel,
         )
     except Feil as e:
         sys.exit(str(e))

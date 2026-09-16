@@ -118,6 +118,10 @@ function visResultat(jobb) {
 
   const verktoy = el("div", { class: "nbvb-rad" },
     el("span", { text: `Varighet ${tid(r.varighet_sekunder)} · ${r.modell}` }),
+    jobb.storyboard
+      ? el("button", { class: "nbvb-primaer", text: "Åpne storyboard",
+                       onclick: () => window.open(`${serverUrl}/storyboard/${jobb.id}`, "_blank", "noopener") })
+      : null,
     el("button", { class: "nbvb-kopier", text: "Kopier beskrivelse", onclick: () => kopier(r.beskrivelse) }),
     el("button", { text: "Last ned JSON", onclick: () => lastNed(jobb) })
   );
@@ -210,6 +214,7 @@ async function start() {
     transkriber: transkriberCb.checked,
     bit_sekunder: bitSekunder,
     samtolk: true,
+    storyboard: true,
   };
   try { chrome.storage.sync.set({ antall, transkriber: transkriberCb.checked, bitSekunder }); } catch (_) {}
 
