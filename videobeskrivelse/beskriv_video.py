@@ -251,6 +251,32 @@ def finn_backend(url: str, token: str | None) -> str:
     return "openai"
 
 
+def tilgjengelige_modeller(url: str, token: str | None) -> list[str]:
+    """Modellnavn serveren tilbyr. Prøver Ollamas /api/tags, så OpenAI-ruten."""
+    base = url.rstrip("/")
+    data = _get_json(f"{base}/api/tags", token)
+    if data and data.get("models"):
+        return [m["name"] for m in data["models"] if m.get("name")]
+    data = _get_json(f"{base}/v1/models", token)
+    if data and data.get("data"):
+        return [m["id"] for m in data["data"] if m.get("id")]
+    return []
+
+
+def _berik_modellfeil(e: Feil, url: str, token: str | None, modell: str) -> Feil:
+    """Gjør «model not found» om til en feil som viser hvilke navn som finnes."""
+    if "not found" not in str(e).lower():
+        return e
+    navn = tilgjengelige_modeller(url, token)
+    if not navn:
+        return e
+    return Feil(
+        f"Modellen '{modell}' finnes ikke på {url.rstrip('/')}. "
+        f"Tilgjengelige modeller: {', '.join(navn)}. "
+        "Velg en med --modell, eller sett NB_INFERENS_MODELL før du starter server.py."
+    )
+
+
 def forste_modell(url: str, token: str | None) -> str:
     data = _get_json(f"{url.rstrip('/')}/v1/models", token)
     modeller = [m.get("id") for m in (data or {}).get("data", []) if m.get("id")]
@@ -278,7 +304,10 @@ def chat(backend: str, url: str, token: str | None, modell: str,
             "think": False,
             "options": OPTIONS,
         }
-        data = _post_json(f"{base}/api/chat", token, payload, timeout)
+        try:
+            data = _post_json(f"{base}/api/chat", token, payload, timeout)
+        except Feil as e:
+            raise _berik_modellfeil(e, base, token, modell) from None
         return data.get("message", {}).get("content", "").strip()
 
     # OpenAI-kompatibel rute (LM Studio, vLLM): bilder som data-URI i content-deler.
@@ -295,7 +324,10 @@ def chat(backend: str, url: str, token: str | None, modell: str,
         "top_p": OPTIONS["top_p"],
         "max_tokens": OPTIONS["num_predict"],
     }
-    data = _post_json(f"{base}/v1/chat/completions", token, payload, timeout)
+    try:
+        data = _post_json(f"{base}/v1/chat/completions", token, payload, timeout)
+    except Feil as e:
+        raise _berik_modellfeil(e, base, token, modell) from None
     valg = data.get("choices") or [{}]
     return (valg[0].get("message") or {}).get("content", "").strip()
 
@@ -584,7 +616,10 @@ def analyser(kilde: str, *, antall: int = 8, bredde: int = 768, url: str = STAND
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Beskriv en video med gemma4 via NBs inferensserver.")
-    p.add_argument("video", help="videofil (mp4, mov, mkv, ...) eller URL, f.eks. en .m3u8-spilleliste")
+    p.add_argument("video", nargs="?",
+                   help="videofil (mp4, mov, mkv, ...) eller URL, f.eks. en .m3u8-spilleliste")
+    p.add_argument("--modeller", action="store_true",
+                   help="list modellene serveren tilbyr, og avslutt")
     p.add_argument("--antall", type=int, default=8,
                    help="antall stillbilder som trekkes ut, jevnt fordelt (standard 8)")
     p.add_argument("--bredde", type=int, default=768,
@@ -615,6 +650,17 @@ def main() -> None:
     p.add_argument("--behold-bilder", type=Path, metavar="MAPPE",
                    help="lagre stillbildene (og lydfila) i denne mappa i stedet for å slette dem")
     a = p.parse_args()
+
+    if a.modeller:
+        navn = tilgjengelige_modeller(a.url, a.token)
+        if not navn:
+            sys.exit(f"Fikk ingen modelliste fra {a.url}. Er adressen riktig, og er du på NB-nett?")
+        print(f"Modeller på {a.url.rstrip('/')}:")
+        for n in navn:
+            print(f"  {n}")
+        return
+    if not a.video:
+        p.error("oppgi en videofil eller URL (eller bruk --modeller)")
 
     try:
         resultat = analyser(

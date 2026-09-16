@@ -68,6 +68,7 @@ strømmen krever det.
 | `--whisper-url` | annet Whisper-endepunkt (eller `NB_WHISPER_URL`) |
 | `--sprak no` | språk for Whisper |
 | `--modell gemma4:e4b` | modellnavn på serveren, for eksempel en mindre og raskere gemma4 |
+| `--modeller` | list modellene serveren tilbyr, og avslutt |
 | `--url http://localhost:11434` | annen server, for eksempel lokal Ollama eller LM Studio |
 | `--backend ollama` / `openai` | overstyr automatisk valg av rute |
 | `--ut resultat.json` | lagre alt som JSON: bilder med tidspunkt, delbeskrivelser, transkripsjon, sluttbeskrivelse |
@@ -146,7 +147,8 @@ Serveren svarer med `Access-Control-Allow-Origin: *` slik at utvidelsen
   ligger oppå musikk hele veien, må vokalen skilles ut først, for eksempel med
   Demucs, før lyden sendes.
 - **Standardmodellen er `gemma4:26b`.** Heter modellen noe annet på serveren din,
-  se lista med `curl -s https://api.inference.nb.no/api/tags`, og sett riktig navn
-  med `--modell` eller miljøvariabelen `NB_INFERENS_MODELL`.
+  se lista med `python3 beskriv_video.py --modeller`, og sett riktig navn med
+  `--modell` eller miljøvariabelen `NB_INFERENS_MODELL`. Treffer du et navn som
+  ikke finnes, viser feilmeldingen hvilke som gjør det.
 - Lyden sendes som 16 kHz mono AAC (48 kbit/s) base64-kodet. Med oppdeling blir
   hver forespørsel liten, uansett hvor langt opptaket er.
