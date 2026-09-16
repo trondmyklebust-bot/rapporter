@@ -146,6 +146,7 @@ def _ny_jobb(kilde: str, param: dict) -> str:
                 sprak=param.get("sprak") or "no",
                 bit_sekunder=int(param.get("bit_sekunder", bv.STANDARD_BIT_SEKUNDER)),
                 samtolk=bool(param.get("samtolk", True)),
+                lydfilter=param.get("lydfilter") or "ingen",
                 referer=param.get("referer"),
                 user_agent=param.get("user_agent"),
                 storyboard=(STORYBOARD_MAPPE / f"{jobb_id}.html"

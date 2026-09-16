@@ -66,6 +66,18 @@ BILDER_PER_KALL = 8
 
 # Lengden på hver lydbit til Whisper. 0 = send hele lydsporet i én forespørsel.
 STANDARD_BIT_SEKUNDER = 20
+
+# Lydfiltre som kan brukes før lyden sendes til Whisper. NB-Whisper fjerner
+# musikk automatisk, og på opptak med musikk under talen forsvinner ofte hele
+# transkripsjonen. Å løfte fram taleområdet og jevne ut nivået kan gjøre at
+# talen slipper gjennom klassifiseringen.
+LYDFILTRE = {
+    "ingen": None,
+    "tale": "highpass=f=120,lowpass=f=6000,dynaudnorm=f=150:g=15",
+    "kraftig": ("highpass=f=150,lowpass=f=5000,"
+                "compand=attacks=0.02:decays=0.3:points=-80/-80|-45/-15|-27/-9|0/-7|20/-7,"
+                "dynaudnorm=f=100:g=21"),
+}
 # Hvor mange lydbiter som sendes samtidig.
 SAMTIDIGE_BITER = 3
 
@@ -168,11 +180,18 @@ def trekk_ut_bilder(kilde: str, antall: int, bredde: int, mappe: Path, varighet:
 
 
 def trekk_ut_lyd(kilde: str, mappe: Path, referer: str | None = None,
-                 user_agent: str | None = None) -> Path:
-    """Lydsporet som 16 kHz mono AAC (m4a), lite nok til å sendes base64-kodet."""
+                 user_agent: str | None = None, lydfilter: str = "ingen") -> Path:
+    """
+    Lydsporet som 16 kHz mono AAC (m4a), lite nok til å sendes base64-kodet.
+
+    `lydfilter` er en nøkkel i LYDFILTRE, eller en ffmpeg-filterkjede direkte.
+    """
     ut = mappe / "lyd.m4a"
+    kjede = LYDFILTRE.get(lydfilter, lydfilter) if lydfilter else None
+    filterargs = ["-af", kjede] if kjede else []
     _kjor(["ffmpeg", "-v", "error", "-y", *_inn_args(kilde, referer, user_agent),
-           "-vn", "-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "48k", str(ut)])
+           "-vn", "-ac", "1", "-ar", "16000", *filterargs,
+           "-c:a", "aac", "-b:a", "48k", str(ut)])
     if not ut.exists() or ut.stat().st_size == 0:
         raise Feil("ffmpeg produserte ingen lydfil. Har videoen lydspor?")
     return ut
@@ -518,6 +537,7 @@ def analyser(kilde: str, *, antall: int = 8, bredde: int = 768, url: str = STAND
              per_kall: int = BILDER_PER_KALL, timeout: int = 600, transkriber_lyd: bool = False,
              whisper_url: str = STANDARD_WHISPER_URL, sprak: str = "no",
              bit_sekunder: int = STANDARD_BIT_SEKUNDER, samtolk: bool = True,
+             lydfilter: str = "ingen",
              referer: str | None = None, user_agent: str | None = None,
              mappe: Path | None = None, storyboard: Path | None = None,
              tittel: str | None = None, logg: Logg = _stderr) -> dict:
@@ -555,8 +575,9 @@ def analyser(kilde: str, *, antall: int = 8, bredde: int = 768, url: str = STAND
 
         def lydjobb():
             try:
-                logg("Trekker ut lydspor ...")
-                lydfil = trekk_ut_lyd(kilde, mappe, referer, user_agent)
+                logg("Trekker ut lydspor ..."
+                     + (f" (lydfilter: {lydfilter})" if lydfilter and lydfilter != "ingen" else ""))
+                lydfil = trekk_ut_lyd(kilde, mappe, referer, user_agent, lydfilter)
                 biter = del_opp_lyd(lydfil, mappe, bit_sekunder, varighet, logg)
                 kb = sum(f.stat().st_size for _, f in biter) // 1024
                 logg(f"Sender {kb} kB lyd til NB-Whisper i {len(biter)} "
@@ -678,6 +699,8 @@ def main() -> None:
     p.add_argument("--whisper-url", default=os.environ.get("NB_WHISPER_URL", STANDARD_WHISPER_URL),
                    help="NB-Whisper-endepunkt (standard fra NB_WHISPER_URL)")
     p.add_argument("--sprak", default="no", help="språk for Whisper (standard no)")
+    p.add_argument("--lydfilter", default="ingen", choices=sorted(LYDFILTRE),
+                   help="behandle lyden før Whisper: ingen (standard), tale eller kraftig")
     p.add_argument("--referer", help="Referer-hode ffmpeg sender når kilden er en URL")
     p.add_argument("--user-agent", help="User-Agent-hode ffmpeg sender når kilden er en URL")
     p.add_argument("--ut", type=Path, help="skriv resultat som JSON til denne fila")
@@ -704,7 +727,7 @@ def main() -> None:
             a.video, antall=a.antall, bredde=a.bredde, url=a.url, token=a.token,
             modell=a.modell, backend=a.backend, per_kall=a.per_kall, timeout=a.timeout,
             transkriber_lyd=a.transkriber, whisper_url=a.whisper_url, sprak=a.sprak,
-            bit_sekunder=a.bit_sekunder, samtolk=not a.ikke_samtolk,
+            bit_sekunder=a.bit_sekunder, samtolk=not a.ikke_samtolk, lydfilter=a.lydfilter,
             referer=a.referer, user_agent=a.user_agent, mappe=a.behold_bilder,
             storyboard=a.storyboard, tittel=a.tittel,
         )

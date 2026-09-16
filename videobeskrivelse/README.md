@@ -17,6 +17,7 @@ Tre deler:
 |-----|-----|
 | `beskriv_video.py` | Kommandolinjeverktøy og kjernen (`analyser()`), kun standardbiblioteket |
 | `storyboard.py` | Bygger storyboardet som én selvstendig HTML-fil |
+| `prov_whisper.py` | Prøver ut hva som gir mest tale ut av NB-Whisper |
 | `server.py` | Lokal HTTP-server som Chrome-utvidelsen snakker med, kun standardbiblioteket |
 | `start.sh` | Stopper gammel server, starter ny, og bekrefter at riktig versjon svarer |
 | `chrome-utvidelse/` | Chrome-utvidelse som legger en «Beskriv video»-knapp på nb.no-sider |
@@ -70,6 +71,7 @@ strømmen krever det.
 | `--ikke-samtolk` | beskriv bildene først og flett inn talen til slutt, som før |
 | `--whisper-url` | annet Whisper-endepunkt (eller `NB_WHISPER_URL`) |
 | `--sprak no` | språk for Whisper |
+| `--lydfilter tale` | behandle lyden før Whisper: `ingen`, `tale` eller `kraftig` |
 | `--modell gemma4:e4b` | modellnavn på serveren, for eksempel en mindre og raskere gemma4 |
 | `--modeller` | list modellene serveren tilbyr, og avslutt |
 | `--url http://localhost:11434` | annen server, for eksempel lokal Ollama eller LM Studio |
@@ -80,6 +82,35 @@ strømmen krever det.
 | `--behold-bilder MAPPE` | behold stillbildene og lydfila for kontroll |
 
 Beskrivelsen skrives til stdout, framdrift til stderr.
+
+### Når Whisper ikke finner talen
+
+Musikkfilteret i NB-Whisper er ikke dokumentert som noe man kan skru av, og på
+en reklamefilm med musikk hele veien kan nesten all tale forsvinne. Tre ting
+kan prøves, i denne rekkefølgen:
+
+1. **Kortere biter.** `--bit-sekunder 10` eller lavere. Hver bit vurderes for
+   seg, så tale i en pause i musikken får en sjanse.
+2. **Lydfilter.** `--lydfilter tale` løfter fram taleområdet og jevner ut
+   nivået. `--lydfilter kraftig` gjør det samme hardere, med kompresjon.
+   Filtrene endrer bare det som sendes til Whisper, ikke det som vises.
+3. **Vokalseparasjon.** Skill ut stemmen med Demucs først, og send bare
+   vokalsporet. Krever en tung modell lokalt, men fjerner jingelen før
+   Whisper ser den.
+
+`prov_whisper.py` prøver alt dette systematisk på ett opptak og teller hvor
+mange ord hver variant gir:
+
+```bash
+python3 prov_whisper.py film.mp4
+python3 prov_whisper.py "https://wow.nb.no/.../playlist.m3u8" \
+    --referer https://www.nb.no/items/URN:NBN:no-nb_video_9314
+```
+
+Den tester fire ting: lydbehandling, bitlengde, udokumenterte felt i
+forespørselen som `filter_music` og `vad`, og andre modellnavn på samme vert,
+for eksempel en verbatim-variant. Resultatet er en tabell over hvor mange ord
+hver variant ga, så du ser hva som virker i stedet for å gjette.
 
 ### Storyboard
 
@@ -196,9 +227,7 @@ Serveren svarer med `Access-Control-Allow-Origin: *` slik at utvidelsen
   betyr det at ffmpeg henter spillelista og ett segment per bilde. Det er
   raskt nok for noen titalls bilder.
 - **NB-Whisper filtrerer bort musikk**, og tale over intro-jingler kan bli kuttet.
-  Kortere biter demper problemet, men fjerner det ikke. Vil du ha med tale som
-  ligger oppå musikk hele veien, må vokalen skilles ut først, for eksempel med
-  Demucs, før lyden sendes.
+  Det finnes ingen dokumentert bryter for å slå det av. Se avsnittet under.
 - **Standardmodellen er `gemma4:26b-a4b-it-q8_0`.** Heter modellen noe annet på serveren din,
   se lista med `python3 beskriv_video.py --modeller`, og sett riktig navn med
   `--modell` eller miljøvariabelen `NB_INFERENS_MODELL`. Treffer du et navn som
