@@ -4,11 +4,12 @@ Verken Ollama på `api.inference.nb.no`, LM Studio eller vLLM tar video som
 input, bare tekst og bilder. Verktøyene her løser det slik:
 
 1. ffmpeg trekker ut stillbilder jevnt fordelt over videoen.
-2. Bildene sendes til en multimodal modell (gemma4 som standard) som beskriver
-   det som er synlig.
-3. Samtidig trekker ffmpeg ut lydsporet og sender det til NB-Whisper.
-4. Et siste modellkall fletter bildebeskrivelse og transkripsjon til én
-   beskrivelse av videoen på norsk.
+2. Samtidig trekker ffmpeg ut lydsporet, deler det i biter og sender bitene til
+   NB-Whisper.
+3. Modellen (`gemma4:26b` som standard) får bildene og talen fra samme tidsrom i
+   ett og samme kall, og tolker dem i sammenheng.
+4. Er videoen delt i flere deler, syr et siste kall delbeskrivelsene sammen til
+   én beskrivelse på norsk.
 
 Tre deler:
 
@@ -17,6 +18,20 @@ Tre deler:
 | `beskriv_video.py` | Kommandolinjeverktøy og kjernen (`analyser()`), kun standardbiblioteket |
 | `server.py` | Lokal HTTP-server som Chrome-utvidelsen snakker med, kun standardbiblioteket |
 | `chrome-utvidelse/` | Chrome-utvidelse som legger en «Beskriv video»-knapp på nb.no-sider |
+
+### Hvorfor lyden deles i biter
+
+NB-Whisper filtrerer bort musikk, og tale over en jingel blir gjerne kuttet. På
+et opptak med gjennomgående musikk, for eksempel en reklamefilm, kan hele talen
+forsvinne når fila vurderes under ett. Sendes lyden i korte biter, vurderes hver
+bit for seg, og tale i en pause i musikken får en sjanse til å slippe gjennom.
+Standard bitlengde er 20 sekunder, og `--bit-sekunder 0` sender hele lydsporet i
+én forespørsel som før.
+
+Tidspunktene regnes om til posisjon i videoen, så segmentene stemmer selv om de
+kommer fra hver sin forespørsel. Talernavn som `SPEAKER_00` tildeles derimot per
+forespørsel, så samme navn i to ulike biter er ikke nødvendigvis samme person.
+Hvert segment har feltet `bit` slik at du ser hvor det kom fra.
 
 ## Krav
 
@@ -31,6 +46,7 @@ Tre deler:
 export NB_INFERENS_TOKEN=xxx          # hvis gatewayen krever token
 python3 beskriv_video.py film.mp4                                   # NB-inferens, gemma4
 python3 beskriv_video.py film.mp4 --transkriber --ut resultat.json  # også lyd via NB-Whisper
+python3 beskriv_video.py film.mp4 --transkriber --bit-sekunder 10   # kortere lydbiter
 python3 beskriv_video.py "https://.../playlist.m3u8" --referer https://www.nb.no/items/...
 python3 beskriv_video.py film.mp4 --url http://localhost:1234       # LM Studio, første modell
 python3 beskriv_video.py film.mp4 --url http://localhost:1234 --modell qwen/qwen3-vl-8b
@@ -46,10 +62,12 @@ strømmen krever det.
 | `--antall 12` | antall stillbilder (standard 8) |
 | `--bredde 768` | bredde bildene skaleres til |
 | `--per-kall 8` | bilder per modellkall; flere kall oppsummeres etterpå |
-| `--transkriber` | send lydsporet til NB-Whisper parallelt og flett inn transkripsjonen |
+| `--transkriber` | send lydsporet til NB-Whisper og tolk talen sammen med bildene |
+| `--bit-sekunder 10` | lengden på hver lydbit til Whisper, 0 sender hele sporet i ett (standard 20) |
+| `--ikke-samtolk` | beskriv bildene først og flett inn talen til slutt, som før |
 | `--whisper-url` | annet Whisper-endepunkt (eller `NB_WHISPER_URL`) |
 | `--sprak no` | språk for Whisper |
-| `--modell gemma4:e4b` | modellnavn på serveren |
+| `--modell gemma4:e4b` | modellnavn på serveren, for eksempel en mindre og raskere gemma4 |
 | `--url http://localhost:11434` | annen server, for eksempel lokal Ollama eller LM Studio |
 | `--backend ollama` / `openai` | overstyr automatisk valg av rute |
 | `--ut resultat.json` | lagre alt som JSON: bilder med tidspunkt, delbeskrivelser, transkripsjon, sluttbeskrivelse |
@@ -75,8 +93,8 @@ Utvidelsen legger en knapp nederst til høyre på `https://www.nb.no/items/...`
    strøm ennå, ber panelet deg trykke play og prøve igjen.
 2. Innholdsskriptet sender strømadressen, sidens URL som Referer, URN og
    tittel til den lokale serveren.
-3. Serveren kjører `analyser()`: bilder til gemma4 og lyd til NB-Whisper
-   parallelt, deretter sluttbeskrivelsen.
+3. Serveren kjører `analyser()`: bilder og lyd hentes parallelt, lyden går til
+   NB-Whisper i biter, og modellen tolker bilder og tale sammen.
 4. Panelet viser framdrift, beskrivelsen, transkripsjonen med taler og
    tidspunkt, og kan kopiere teksten eller laste ned alt som JSON.
 
@@ -97,15 +115,16 @@ Last inn utvidelsen i Chrome:
 
 1. Åpne `chrome://extensions`, slå på «Utviklermodus».
 2. Velg «Last inn upakket» og pek på mappa `videobeskrivelse/chrome-utvidelse`.
-3. Under utvidelsens innstillinger kan du endre serveradresse, antall bilder
-   og om lyd skal sendes til Whisper.
+3. Under utvidelsens innstillinger kan du endre serveradresse, antall bilder,
+   bitlengden for lyden og om lyd skal sendes til Whisper. De to siste kan også
+   settes rett i panelet.
 
 ### Ruter på serveren
 
 | Rute | Hva |
 |------|-----|
 | `GET /helse` | status, hvilken inferens- og Whisper-adresse som brukes, om ffmpeg finnes |
-| `POST /jobb` | start en jobb. Body: `{"kilde": url, "referer": ..., "user_agent": ..., "antall": 8, "transkriber": true, "urn": ..., "tittel": ...}` |
+| `POST /jobb` | start en jobb. Body: `{"kilde": url, "referer": ..., "user_agent": ..., "antall": 8, "transkriber": true, "bit_sekunder": 20, "samtolk": true, "urn": ..., "tittel": ...}` |
 | `GET /jobb/<id>` | status (`kjører`, `ferdig`, `feil`), logg og resultat |
 | `GET /jobber` | liste over jobber i denne kjøringen |
 
@@ -123,5 +142,11 @@ Serveren svarer med `Access-Control-Allow-Origin: *` slik at utvidelsen
   betyr det at ffmpeg henter spillelista og ett segment per bilde. Det er
   raskt nok for noen titalls bilder.
 - **NB-Whisper filtrerer bort musikk**, og tale over intro-jingler kan bli kuttet.
-- Lyden sendes som 16 kHz mono AAC (48 kbit/s) base64-kodet i én JSON-forespørsel.
-  Svært lange opptak gir store forespørsler.
+  Kortere biter demper problemet, men fjerner det ikke. Vil du ha med tale som
+  ligger oppå musikk hele veien, må vokalen skilles ut først, for eksempel med
+  Demucs, før lyden sendes.
+- **Standardmodellen er `gemma4:26b`.** Heter modellen noe annet på serveren din,
+  se lista med `curl -s https://api.inference.nb.no/api/tags`, og sett riktig navn
+  med `--modell` eller miljøvariabelen `NB_INFERENS_MODELL`.
+- Lyden sendes som 16 kHz mono AAC (48 kbit/s) base64-kodet. Med oppdeling blir
+  hver forespørsel liten, uansett hvor langt opptaket er.

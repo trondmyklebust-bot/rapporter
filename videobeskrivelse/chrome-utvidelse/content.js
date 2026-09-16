@@ -7,7 +7,7 @@ const STANDARD_SERVER = "http://127.0.0.1:8765";
 const POLL_MS = 2000;
 
 let serverUrl = STANDARD_SERVER;
-let innstillinger = { antall: 8, transkriber: true };
+let innstillinger = { antall: 8, transkriber: true, bitSekunder: 20 };
 let aktivJobb = null;
 let pollTimer = null;
 
@@ -44,9 +44,9 @@ function tittelFraSide() {
 
 async function hentInnstillinger() {
   try {
-    const l = await chrome.storage.sync.get({ serverUrl: STANDARD_SERVER, antall: 8, transkriber: true });
+    const l = await chrome.storage.sync.get({ serverUrl: STANDARD_SERVER, antall: 8, transkriber: true, bitSekunder: 20 });
     serverUrl = l.serverUrl || STANDARD_SERVER;
-    innstillinger = { antall: l.antall, transkriber: l.transkriber };
+    innstillinger = { antall: l.antall, transkriber: l.transkriber, bitSekunder: l.bitSekunder };
   } catch (_) { /* bruk standard */ }
 }
 
@@ -74,7 +74,7 @@ function stromFraVideoElement() {
 
 // ---------- panel ----------
 
-let panel, statusEl, feilEl, resultatEl, loggEl, startKnapp, antallInput, transkriberCb;
+let panel, statusEl, feilEl, resultatEl, loggEl, startKnapp, antallInput, transkriberCb, bitInput;
 
 function byggPanel() {
   if (panel) return;
@@ -87,10 +87,13 @@ function byggPanel() {
   transkriberCb = el("input", { type: "checkbox" });
   transkriberCb.checked = !!innstillinger.transkriber;
   startKnapp = el("button", { text: "Beskriv denne videoen", onclick: start });
+  bitInput = el("input", { type: "number", min: "0", max: "600", value: String(innstillinger.bitSekunder),
+                           title: "Sekunder per lydbit til Whisper. 0 sender hele lydsporet i én forespørsel." });
   const rad = el("div", { class: "nbvb-rad" },
     startKnapp,
     el("label", {}, el("span", { text: "Bilder" }), antallInput),
-    el("label", {}, transkriberCb, el("span", { text: "Whisper" }))
+    el("label", {}, transkriberCb, el("span", { text: "Whisper" })),
+    el("label", { title: "Sekunder per lydbit. 0 = hele lydsporet i ett." }, el("span", { text: "Bit s" }), bitInput)
   );
   statusEl = el("div", { class: "nbvb-status", text: "Klar." });
   feilEl = el("div", { class: "nbvb-feil", hidden: "" });
@@ -123,7 +126,8 @@ function visResultat(jobb) {
   resultatEl.append(el("h4", { text: "Beskrivelse" }), el("p", { class: "nbvb-tekst", text: r.beskrivelse || "(tom)" }));
 
   if (r.transkripsjon) {
-    resultatEl.append(el("h4", { text: "Transkripsjon (NB-Whisper)" }));
+    const biter = r.transkripsjon.antall_biter;
+    resultatEl.append(el("h4", { text: biter > 1 ? `Transkripsjon (NB-Whisper, ${biter} biter)` : "Transkripsjon (NB-Whisper)" }));
     const seg = (r.transkripsjon.segmenter || []).filter((s) => s.tekst);
     if (seg.length) {
       for (const s of seg) {
@@ -140,6 +144,9 @@ function visResultat(jobb) {
     resultatEl.append(el("h4", { text: "Transkripsjon" }), el("p", { class: "nbvb-tekst", text: "Feilet: " + r.transkripsjon_feil }));
   }
 
+  if (r.samtolk) {
+    resultatEl.append(el("p", { class: "nbvb-status", text: "Bildene og talen ble tolket sammen i samme modellkall." }));
+  }
   if (r.bildebeskrivelse && r.bildebeskrivelse !== r.beskrivelse) {
     resultatEl.append(el("h4", { text: "Bare bildene" }), el("p", { class: "nbvb-tekst", text: r.bildebeskrivelse }));
   }
@@ -192,6 +199,7 @@ async function start() {
 
   // 3. Start jobb.
   const antall = Math.max(1, Math.min(60, Number(antallInput.value) || 8));
+  const bitSekunder = Math.max(0, Math.min(600, Number(bitInput.value) || 0));
   const body = {
     kilde: strom.url,
     referer: location.href,
@@ -200,8 +208,10 @@ async function start() {
     tittel: tittelFraSide(),
     antall,
     transkriber: transkriberCb.checked,
+    bit_sekunder: bitSekunder,
+    samtolk: true,
   };
-  try { chrome.storage.sync.set({ antall, transkriber: transkriberCb.checked }); } catch (_) {}
+  try { chrome.storage.sync.set({ antall, transkriber: transkriberCb.checked, bitSekunder }); } catch (_) {}
 
   startKnapp.disabled = true;
   settStatus(`Sender ${strom.type === "master" ? "HLS-spillelista" : "strømmen"} til serveren …\n${strom.url}`);

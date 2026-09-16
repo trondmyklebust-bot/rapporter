@@ -20,6 +20,9 @@
   <label for="antall">Antall stillbilder</label>
   <input type="number" id="antall" min="1" max="60">
   <label><input type="checkbox" id="transkriber"> Send lyd til NB-Whisper</label>
+  <label for="bitSekunder">Sekunder per lydbit</label>
+  <input type="number" id="bitSekunder" min="0" max="600">
+  <p class="hint">Whisper filtrerer bort musikk. Korte biter gir tale i en pause i musikken en sjanse til å slippe gjennom. 0 sender hele lydsporet i én forespørsel.</p>
   <button id="lagre">Lagre</button><span id="status"></span>
   <script src="options.js"></script>
 </body>

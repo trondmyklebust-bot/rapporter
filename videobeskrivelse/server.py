@@ -13,7 +13,8 @@ Kun standardbiblioteket. Start med:
 
 Ruter:
     GET  /helse            → {"ok": true, ...}
-    POST /jobb             → {"id": "..."}   body: {"kilde": url, "referer": ..., "antall": 8, ...}
+    POST /jobb             → {"id": "..."}   body: {"kilde": url, "referer": ..., "antall": 8,
+                                                   "transkriber": true, "bit_sekunder": 20, ...}
     GET  /jobb/<id>        → {"status": "kjører"|"ferdig"|"feil", "logg": [...], "resultat": {...}}
     GET  /jobber           → liste over jobber
 """
@@ -40,7 +41,7 @@ MAKS_JOBBER = 50
 INNSTILLINGER = {
     "url": os.environ.get("NB_INFERENS_URL", bv.STANDARD_URL),
     "token": os.environ.get("NB_INFERENS_TOKEN"),
-    "modell": os.environ.get("NB_INFERENS_MODELL"),  # None → gemma4:e4b på Ollama
+    "modell": os.environ.get("NB_INFERENS_MODELL"),  # None → gemma4:26b på Ollama
     "whisper_url": os.environ.get("NB_WHISPER_URL", bv.STANDARD_WHISPER_URL),
 }
 
@@ -85,6 +86,8 @@ def _ny_jobb(kilde: str, param: dict) -> str:
                 transkriber_lyd=bool(param.get("transkriber", True)),
                 whisper_url=param.get("whisper_url") or INNSTILLINGER["whisper_url"],
                 sprak=param.get("sprak") or "no",
+                bit_sekunder=int(param.get("bit_sekunder", bv.STANDARD_BIT_SEKUNDER)),
+                samtolk=bool(param.get("samtolk", True)),
                 referer=param.get("referer"),
                 user_agent=param.get("user_agent"),
                 logg=logg,
@@ -153,6 +156,7 @@ class Handler(BaseHTTPRequestHandler):
                 "inferens_url": INNSTILLINGER["url"],
                 "modell": INNSTILLINGER["modell"] or bv.STANDARD_MODELL,
                 "whisper_url": INNSTILLINGER["whisper_url"],
+                "bit_sekunder": bv.STANDARD_BIT_SEKUNDER,
                 "ffmpeg": bool(__import__("shutil").which("ffmpeg")),
             })
         elif sti == "/jobber":
