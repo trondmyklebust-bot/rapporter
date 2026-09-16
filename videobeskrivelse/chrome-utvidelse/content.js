@@ -115,16 +115,27 @@ function byggPanel() {
 // Hent modellene serveren tilbyr og legg dem i nedtrekkslista. Modeller som
 // kan se bilder står øverst, siden en ren tekstmodell ikke kan beskrive video.
 async function fyllModeller() {
-  let data;
+  const vis = (tekst, merknad, advarsel) => {
+    modellSelect.replaceChildren(el("option", { value: "", text: tekst }));
+    modellNote.textContent = merknad || "";
+    modellNote.className = advarsel ? "nbvb-note nbvb-advarsel" : "nbvb-note";
+  };
+  let res, data;
   try {
-    data = await (await fetch(serverUrl + "/modeller")).json();
+    res = await fetch(serverUrl + "/modeller");
+    data = await res.json();
   } catch (_) {
-    modellSelect.replaceChildren(el("option", { value: "", text: "Serveren svarer ikke" }));
+    vis("Serveren svarer ikke", `Ingen kontakt med ${serverUrl}. Kjører server.py?`, true);
+    return;
+  }
+  if (res.status === 404) {
+    // Gammel server kjenner ikke ruta og svarer {"feil": "ukjent rute"}.
+    vis("Serveren mangler ruta", "Serveren kjører eldre kode. Stopp den, kjør git pull, og start server.py på nytt.", true);
     return;
   }
   const liste = data.modeller || [];
   if (!liste.length) {
-    modellSelect.replaceChildren(el("option", { value: "", text: "Fant ingen modeller" }));
+    vis("Fant ingen modeller", data.hint || "Serveren fikk ingen modelliste fra inferensserveren.", true);
     return;
   }
   const standard = data.standard || "";

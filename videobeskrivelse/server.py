@@ -210,10 +210,16 @@ class Handler(BaseHTTPRequestHandler):
         elif sti == "/modeller":
             frisk = "frisk" in self.path
             modeller = modelliste(frisk)
-            self._json(200, {
+            svar = {
                 "modeller": modeller,
                 "standard": INNSTILLINGER["modell"] or bv.STANDARD_MODELL,
-            })
+            }
+            if not modeller:
+                svar["hint"] = (
+                    f"Fikk ingen modelliste fra {INNSTILLINGER['url']}. "
+                    "Er du på NB-nett, og er NB_INFERENS_TOKEN riktig eller fjernet?"
+                )
+            self._json(200, svar)
         elif sti.startswith("/storyboard/"):
             jobb_id = sti[len("/storyboard/"):]
             fil = STORYBOARD_MAPPE / f"{jobb_id}.html"
