@@ -39,6 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import beskriv_video as bv  # noqa: E402
+import deling  # noqa: E402
 
 JOBBER: dict[str, dict] = {}
 LAS = threading.Lock()
@@ -46,6 +47,12 @@ MAKS_JOBBER = 50
 
 # Storyboardene legges her og hentes via /storyboard/<id>.
 STORYBOARD_MAPPE = Path(__file__).resolve().parent / "storyboards"
+
+# Deling mellom servere, se deling.py. IMPORTNOKKEL slår på mottak (sandkassa),
+# DEL_TIL og DEL_NOKKEL sender hver ferdige jobb videre (lokalt).
+IMPORTNOKKEL = os.environ.get("NB_VIDEO_IMPORTNOKKEL") or None
+DEL_TIL = (os.environ.get("NB_VIDEO_DEL_TIL") or "").rstrip("/") or None
+DEL_NOKKEL = os.environ.get("NB_VIDEO_DEL_NOKKEL") or None
 
 # Modellista hentes fra inferensserveren og holdes en stund, siden den
 # krever ett /api/show-kall per modell.
@@ -243,6 +250,7 @@ def _ny_jobb(kilde: str, param: dict) -> str:
                 jobb["storyboard"] = bool(resultat.get("storyboard"))
                 jobb["status"] = "ferdig"
             logg("Ferdig")
+            del_videre(jobb_id, jobb, logg)
         except Exception as e:  # noqa: BLE001 - alt skal tilbake til utvidelsen
             with LAS:
                 jobb["feil"] = str(e)
@@ -251,6 +259,24 @@ def _ny_jobb(kilde: str, param: dict) -> str:
 
     threading.Thread(target=kjor, daemon=True).start()
     return jobb_id
+
+
+def del_videre(jobb_id: str, jobb: dict, logg) -> None:
+    """Send storyboardet til sandkassa når NB_VIDEO_DEL_TIL er satt."""
+    if not DEL_TIL or not jobb.get("storyboard"):
+        return
+    fil = STORYBOARD_MAPPE / f"{jobb_id}.html"
+    if not DEL_NOKKEL:
+        logg("Deler ikke: NB_VIDEO_DEL_TIL er satt, men NB_VIDEO_DEL_NOKKEL mangler")
+        return
+    status, melding = deling.send_storyboard(DEL_TIL, DEL_NOKKEL, fil)
+    url = f"{DEL_TIL}/storyboard/{jobb_id}"
+    with LAS:
+        jobb["delt"] = url if status in (200, 201) else None
+    if status in (200, 201):
+        logg(f"Delt til sandkassa: {url}")
+    else:
+        logg(f"Deling feilet (HTTP {status}): {melding[:200]}")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -309,7 +335,9 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": True,
                 "versjon": versjon(),
                 "ruter": ["/helse", "/jobb", "/jobb/<id>", "/jobber", "/modeller",
-                          "/storyboard/<id>"],
+                          "/storyboard/<id>", "PUT /storyboard/<id>"],
+                "import": bool(IMPORTNOKKEL),
+                "deler_til": DEL_TIL,
                 "inferens_url": INNSTILLINGER["url"],
                 "modell": INNSTILLINGER["modell"] or bv.STANDARD_MODELL,
                 "whisper_url": INNSTILLINGER["whisper_url"],
@@ -340,6 +368,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self._cors()
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Security-Policy", deling.STORYBOARD_CSP)
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Length", str(len(kropp)))
             self.end_headers()
             self.wfile.write(kropp)
@@ -378,6 +408,44 @@ class Handler(BaseHTTPRequestHandler):
         self._json(202, {"id": jobb_id})
 
 
+    def do_PUT(self):
+        """Ta imot et ferdig storyboard fra en annen server, se deling.py."""
+        sti = self.path.split("?", 1)[0].rstrip("/")
+        if not sti.startswith("/storyboard/"):
+            self._json(404, {"feil": "ukjent rute"})
+            return
+        if not IMPORTNOKKEL:
+            self._json(503, {"feil": "mottak er ikke slått på, sett NB_VIDEO_IMPORTNOKKEL"})
+            return
+        if not deling.nokkel_ok(self.headers.get(deling.NOKKEL_HODE), IMPORTNOKKEL):
+            self._json(403, {"feil": "feil eller manglende nøkkel"})
+            return
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n <= 0:
+            self._json(411, {"feil": "mangler Content-Length"})
+            return
+        if n > deling.MAKS_BYTES:
+            self._json(413, {"feil": "fila er for stor"})
+            return
+        jobb_id = sti[len("/storyboard/"):]
+        try:
+            opprettet = float(self.headers.get(deling.OPPRETTET_HODE) or 0) or None
+        except ValueError:
+            opprettet = None
+        try:
+            status = deling.lagre_storyboard(
+                STORYBOARD_MAPPE, jobb_id, self.rfile.read(n),
+                erstatt="erstatt=1" in self.path, opprettet=opprettet)
+        except deling.Avvist as e:
+            self._json(e.status, {"feil": str(e)})
+            return
+        print(f"[import] {jobb_id}: {status}", file=sys.stderr, flush=True)
+        self._json(201 if status == "ny" else 200, {"id": jobb_id, "status": status})
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Lokal server for NB videobeskrivelse.")
     p.add_argument("--vert", default="127.0.0.1")
@@ -391,6 +459,12 @@ def main() -> None:
     print(f"NB videobeskrivelse lytter på http://{a.vert}:{a.port}  "
           f"(inferens: {INNSTILLINGER['url']}, whisper: {INNSTILLINGER['whisper_url']})",
           file=sys.stderr)
+    if IMPORTNOKKEL:
+        print("  tar imot storyboards fra andre servere (NB_VIDEO_IMPORTNOKKEL er satt)",
+              file=sys.stderr)
+    if DEL_TIL:
+        print(f"  deler ferdige jobber til {DEL_TIL}"
+              + ("" if DEL_NOKKEL else "  (MEN NB_VIDEO_DEL_NOKKEL mangler)"), file=sys.stderr)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

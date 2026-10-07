@@ -20,6 +20,8 @@ Tre deler:
 | `prov_whisper.py` | Prøver ut hva som gir mest tale ut av NB-Whisper |
 | `server.py` | Lokal HTTP-server som Chrome-utvidelsen snakker med, kun standardbiblioteket |
 | `start.sh` | Stopper gammel server, starter ny, og bekrefter at riktig versjon svarer |
+| `deling.py` | Sender og tar imot storyboards mellom en lokal server og sandkassa |
+| `send_til_sandkasse.py` | Legger lokalt kjørte jobber inn i lista i sandkassa |
 | `chrome-utvidelse/` | Chrome-utvidelse som legger «Videobeskrivelse» i NB-verktøydokken på nb.no |
 
 ### Musikkfilteret er slått av
@@ -244,11 +246,58 @@ ett kall per modell.
 | `GET /jobb/<id>` | status (`kjører`, `ferdig`, `feil`), logg og resultat |
 | `GET /modeller` | modellene inferensserveren tilbyr, hver med om den kan se bilder. `?frisk` hopper over mellomlagringen |
 | `GET /storyboard/<id>` | storyboardet for jobben som ferdig HTML-side |
+| `PUT /storyboard/<id>` | ta imot et ferdig storyboard fra en annen server. Krever `X-Importnokkel`, se under |
 | `GET /jobber` | liste over jobber i denne kjøringen |
 
 Serveren svarer med `Access-Control-Allow-Origin: *` slik at utvidelsen
 (opphav `chrome-extension://...`) får lov å kalle den. Den lytter bare på
 127.0.0.1.
+
+### Legge lokale jobber inn i lista i sandkassa
+
+Lista på startsiden bygges av storyboard-filene i `storyboards/`, ikke av
+jobbene i minnet. Det er derfor `/jobber` kan være tom mens lista har innhold.
+En jobb du har kjørt lokalt kommer inn i lista i sandkassa ved at
+storyboard-fila sendes dit med `PUT /storyboard/<id>`.
+
+Mottaket er av til det slås på med en delt nøkkel. I sandkassa:
+
+```bash
+NB_VIDEO_IMPORTNOKKEL=<lang tilfeldig streng> ./start.sh
+```
+
+Lokalt kan du så sende alt du har, eller én jobb:
+
+```bash
+export NB_VIDEO_DEL_NOKKEL=<samme streng>
+python3 send_til_sandkasse.py                  # alle lokale storyboards
+python3 send_til_sandkasse.py 9277e217c765     # bare én
+python3 send_til_sandkasse.py --tørrkjøring    # se hva som ville blitt sendt
+```
+
+Vil du at hver ny lokal jobb havner i sandkassa av seg selv, start den lokale
+serveren med begge satt:
+
+```bash
+NB_VIDEO_DEL_TIL=https://sandkasse.nb.no/nb-videobeskrivelse \
+NB_VIDEO_DEL_NOKKEL=<samme streng> ./start.sh
+```
+
+Da står det «Delt til sandkassa» i loggen når jobben er ferdig, og jobben
+får feltet `delt` med adressen.
+
+Det som finnes fra før med samme innhold hoppes over. Finnes samme id med
+annet innhold, avvises det med 409, og `--erstatt` skriver over. Tidspunktet
+jobben ble kjørt følger med, så lista i sandkassa sorteres etter når jobben
+faktisk ble kjørt, ikke når den ble sendt.
+
+**Sikkerhet.** Mottaket sammenligner nøkkelen i konstant tid, godtar bare
+id-er av bokstaver, tall, `-` og `_`, bare HTML-sider under 40 MB, og skriver
+via en midlertidig fil så en avbrutt opplasting aldri blir liggende. Alle
+storyboards serveres med en innholdspolicy som stopper skript og eksterne
+ressurser. Storyboardene har ingen skript, så det endrer ingenting for dem,
+men det betyr at heller ikke en fil fra en som har nøkkelen kan kjøre kode i
+nettleseren til den som åpner den.
 
 ## Kjente forbehold
 
