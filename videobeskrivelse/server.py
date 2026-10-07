@@ -411,7 +411,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         """Ta imot et ferdig storyboard fra en annen server, se deling.py."""
         sti = self.path.split("?", 1)[0].rstrip("/")
-        if not sti.startswith("/storyboard/"):
+        # Godta ruta med og uten prefiks foran, for eksempel
+        # /nb-videobeskrivelse/storyboard/<id> bak en omvendt proxy.
+        treff = re.search(r"(?:^|/)storyboard/([^/]+)$", sti)
+        if not treff:
             self._json(404, {"feil": "ukjent rute"})
             return
         if not IMPORTNOKKEL:
@@ -430,7 +433,7 @@ class Handler(BaseHTTPRequestHandler):
         if n > deling.MAKS_BYTES:
             self._json(413, {"feil": "fila er for stor"})
             return
-        jobb_id = sti[len("/storyboard/"):]
+        jobb_id = treff.group(1)
         try:
             opprettet = float(self.headers.get(deling.OPPRETTET_HODE) or 0) or None
         except ValueError:
